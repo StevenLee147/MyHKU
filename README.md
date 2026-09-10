@@ -4,7 +4,22 @@
 
 ## 下载与设备对应
 
-旧预发布版本及其安装包已撤下，当前没有可下载的发布版本。请按下方说明从源码构建；新的安装包发布后会更新此处。
+当前最新可下载版本：**[v0.1.1-alpha（预发布版）](https://github.com/StevenLee147/MyHKU/releases/tag/v0.1.1-alpha)**。按设备选择下表中的安装包，无需下载源码。
+
+| 设备 | 对应安装包 | 最新版本下载 | 安装提示 |
+| --- | --- | --- | --- |
+| Windows 64 位电脑（Intel / AMD x64） | `MyHKU.Setup.0.1.1-alpha.exe` | [下载安装版 EXE](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.1-alpha/MyHKU.Setup.0.1.1-alpha.exe) | 推荐；运行安装向导。 |
+| Windows 64 位电脑（免安装） | `MyHKU.0.1.1-alpha.exe` | [下载便携版 EXE](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.1-alpha/MyHKU.0.1.1-alpha.exe) | 下载后直接运行。 |
+| Mac Apple Silicon（M 系列芯片 / arm64） | `MyHKU-0.1.1-alpha-arm64.dmg` | [下载 DMG](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.1-alpha/MyHKU-0.1.1-alpha-arm64.dmg) | 拖入 Applications；如遇系统拦截，见[各设备安装指南](#各设备安装指南)。 |
+| Mac Apple Silicon（ZIP 备用包） | `MyHKU-0.1.1-alpha-arm64-mac.zip` | [下载 ZIP](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.1-alpha/MyHKU-0.1.1-alpha-arm64-mac.zip) | 解压后移入 Applications；系统拦截处理见[安装指南](#各设备安装指南)。 |
+| Android 8.0 及以上手机 / 平板 | `app-debug.apk` | [下载测试 APK（可安装）](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.1-alpha/app-debug.apk) | 使用调试签名，可直接安装；更新限制见[安装指南](#各设备安装指南)。 |
+| Android 应用商店分发 / 开发者 | `app-release.aab` | [下载 AAB](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.1-alpha/app-release.aab) | 用于商店分发或生成 APK，不能直接点击安装。 |
+
+当前未提供 Intel Mac（x64）、Windows ARM64 原生包或 iPhone / iPad 安装包。Mac 可在「关于本机」查看芯片类型；Windows 可在「设置 → 系统 → 系统信息」查看系统类型。
+
+本节由 CI/CD 在发布成功后自动更新，包含预发布版，按发布时间选择最新版本。查看[全部版本](https://github.com/StevenLee147/MyHKU/releases)；[Latest 正式版入口](https://github.com/StevenLee147/MyHKU/releases/latest)仅包含正式版，没有正式版时不可用。
+
+可下载 [SHA256SUMS.txt](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.1-alpha/SHA256SUMS.txt) 校验文件完整性；`.blockmap`、`latest.yml` 和 `latest-mac.yml` 是更新元数据，无需手动安装。
 
 ## 各设备安装指南
 
