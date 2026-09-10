@@ -8,7 +8,7 @@
  */
 
 export type HkuSite = 'portal' | 'sis' | 'moodle'
-export type ConnectionState = 'disconnected' | 'login_pending' | 'connected' | 'error'
+export type ConnectionState = 'disconnected' | 'checking' | 'login_pending' | 'connected' | 'error'
 export type DataMode = 'demo' | 'live'
 
 export type SiteConnection = {
@@ -96,10 +96,25 @@ function save(states: Record<HkuSite, SiteConnection>) {
   return states
 }
 
-/** Remember that the user opened an official login link. The UI anchor owns navigation. */
-export function openOfficialLogin(site: HkuSite): Record<HkuSite, SiteConnection> {
+/** Native auth state is independent of whether course extraction has finished. */
+export function applyDesktopSessions(sessions: DesktopSessions): Record<HkuSite, SiteConnection> {
+  const states = defaultStates()
+  for (const site of Object.keys(states) as HkuSite[]) {
+    const item = sessions[site]
+    const state: ConnectionState = item.state === 'connected' ? 'connected'
+      : ['queued', 'checking'].includes(item.state) ? 'checking'
+      : ['manual_required', 'needs_2fa'].includes(item.state) ? 'login_pending'
+      : item.state === 'error' ? 'error' : 'disconnected'
+    states[site] = { state, detail: item.detail, checkedAt: item.checkedAt }
+  }
+  return save(states)
+}
+
+export async function openOfficialLogin(site: HkuSite): Promise<Record<HkuSite, SiteConnection>> {
+  if (window.myhkuDesktop?.loginSite) return applyDesktopSessions(await window.myhkuDesktop.loginSite(site))
+  window.open(HKU_SITES[site].url, '_blank', 'noopener,noreferrer')
   const states = getConnectionStates()
-  states[site] = { state: 'login_pending', detail: '已打开官方登录页，请完成 SSO/MFA 后返回应用' }
+  states[site] = { state: 'login_pending', detail: '请在官方页面完成登录，连接状态会自动更新' }
   return save(states)
 }
 
@@ -117,6 +132,7 @@ function nativeSession(site: HkuSite): SiteConnection | null {
  * This does not validate or expose the native authentication session.
  */
 export async function checkConnection(site: HkuSite): Promise<SiteConnection> {
+  if (window.myhkuDesktop?.authSessions) return applyDesktopSessions(await window.myhkuDesktop.authSessions())[site]
   const native = nativeSession(site)
   if (native) { save({ ...getConnectionStates(), [site]: native }); return native }
   if (!bridgeBase) {
@@ -143,6 +159,7 @@ export async function checkConnection(site: HkuSite): Promise<SiteConnection> {
 }
 
 export async function checkAllConnections() {
+  if (window.myhkuDesktop?.authSessions) return applyDesktopSessions(await window.myhkuDesktop.authSessions())
   const sites: HkuSite[] = ['portal', 'sis', 'moodle']
   const entries = await Promise.all(sites.map(async site => [site, await checkConnection(site)] as const))
   return Object.fromEntries(entries) as Record<HkuSite, SiteConnection>
@@ -191,7 +208,7 @@ export async function fetchLiveSnapshot(signal?: AbortSignal): Promise<LiveSnaps
   if (!response.ok) throw new Error(`桥接同步失败（HTTP ${response.status}）`)
   const payload = await response.json() as Partial<LiveSnapshot>
   if (typeof payload.fetchedAt !== 'string' || Number.isNaN(Date.parse(payload.fetchedAt))) {
-    throw new Error('尚未收到 HKU 页面数据。请在应用内完成官方登录，再点击立即刷新。')
+    throw new Error('尚未收到 HKU 页面数据，数据到达后会自动更新。')
   }
   return {
     fetchedAt: payload.fetchedAt,

@@ -457,5 +457,5 @@
     } catch (_) { /* bridge may be stopped; the next page load retries */ }
   }
 
-  publish()
+  return publish()
 })()

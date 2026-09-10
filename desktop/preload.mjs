@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
   version: process.versions.electron,
   refreshHku: () => ipcRenderer.invoke('myhku-refresh-hku'),
   accountStatus: () => ipcRenderer.invoke('myhku-account-status'),
+  authSessions: () => ipcRenderer.invoke('myhku-auth-sessions'),
+  loginSite: (site) => ipcRenderer.invoke('myhku-login-site', site),
   saveAccount: (value) => ipcRenderer.invoke('myhku-save-account', {
     localUsername: String(value?.localUsername || ''),
     email: String(value?.email || ''),

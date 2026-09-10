@@ -2,8 +2,9 @@ import { StrictMode, useEffect, useMemo, useRef, useState, type FormEvent } from
 import { createRoot } from 'react-dom/client'
 import { Bell, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Clock3, Download, ExternalLink, FileText, LayoutDashboard, Link2, LogIn, Menu, RefreshCw, Search, Settings, ShieldCheck, Sparkles, Trophy, X, CircleAlert } from 'lucide-react'
 import './styles.css'
-import { cacheSnapshot, checkAllConnections, checkConnection, fetchLiveSnapshot, getCachedSnapshot, getConnectionStates, getDataMode, HKU_SITES, notifySnapshotChanges, openOfficialLogin, safeHkuUrl, setDataMode, type ConnectionState, type DataMode, type HkuSite, type LiveSnapshot, type SiteConnection } from './services/hku'
+import { applyDesktopSessions, cacheSnapshot, checkAllConnections, checkConnection, fetchLiveSnapshot, getCachedSnapshot, getConnectionStates, getDataMode, HKU_SITES, notifySnapshotChanges, openOfficialLogin, safeHkuUrl, setDataMode, type ConnectionState, type DataMode, type HkuSite, type LiveSnapshot, type SiteConnection } from './services/hku'
 
+type ConnectionPhase = 'checking' | 'connected' | 'manual' | 'disconnected'
 type NavKey = 'overview' | 'calendar' | 'moodle' | 'materials' | 'settings'
 const navItems: { key: NavKey; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'overview', label: '概览', icon: LayoutDashboard }, { key: 'calendar', label: '我的课表', icon: CalendarDays }, { key: 'moodle', label: 'Moodle', icon: BookOpen }, { key: 'materials', label: '课程资料', icon: FileText }, { key: 'settings', label: '设置', icon: Settings }
@@ -19,7 +20,7 @@ const dueItems = [
 ]
 
 const connectionLabel: Record<ConnectionState, string> = {
-  disconnected: '未连接', login_pending: '等待完成登录', connected: '已连接', error: '检查失败',
+  disconnected: '未连接', checking: '正在自动连接', login_pending: '等待完成登录', connected: '已连接', error: '检查失败',
 }
 
 function AccountSetup({ onReady }: { onReady: (account: { username: string; email: string }) => void }) {
@@ -53,13 +54,13 @@ function ConnectionSettings({ mode, setMode, states, setStates, onNotice }: {
   onNotice: (message: string) => void
 }) {
   const [checking, setChecking] = useState<HkuSite | 'all' | null>(null)
-  const login = (site: HkuSite) => {
+  const login = async (site: HkuSite) => {
     // Opening an official login page is an explicit request for the user's
     // real HKU data. This also recovers from an older install that persisted
     // the demo mode before the native session bridge was added.
     if (mode !== 'live') setMode('live')
-    setStates(openOfficialLogin(site))
-    onNotice(`已打开 ${HKU_SITES[site].label} 官方登录页；完成 SSO/MFA 后回来检查连接`)
+    try { setStates(await openOfficialLogin(site)); onNotice(`${HKU_SITES[site].label} 正在自动检查连接，需要操作时会显示官方窗口`) }
+    catch { onNotice('无法启动连接，请稍后重试') }
   }
   const check = async (site: HkuSite) => {
     setChecking(site)
@@ -78,7 +79,7 @@ function ConnectionSettings({ mode, setMode, states, setStates, onNotice }: {
     <div className="connection-list">{(Object.keys(HKU_SITES) as HkuSite[]).map(site => {
       const item = HKU_SITES[site]; const state = states[site]
       const isChecking = checking === site || checking === 'all'
-      return <article className="connection-card" key={site}><div className="connection-icon"><ShieldCheck size={19}/></div><div className="connection-copy"><strong>{item.label}</strong><span>{item.description}</span><small className={`connection-state ${state.state}`}><i/>{connectionLabel[state.state]}{state.detail ? ` · ${state.detail}` : ''}</small></div><div className="connection-actions"><a className="login-link" href={item.url} target="_blank" rel="noreferrer" onClick={() => login(site)} aria-label={`在官方页面登录 ${item.label}`}><LogIn size={14}/> 官方登录</a><button className="check-link" onClick={() => check(site)} disabled={isChecking}>{isChecking ? <RefreshCw size={13} className="spin"/> : <Link2 size={13}/>} 检查连接</button><a href={item.url} target="_blank" rel="noreferrer" aria-label={`打开 ${item.label}`}><ExternalLink size={14}/></a></div></article>
+      return <article className="connection-card" key={site}><div className="connection-icon"><ShieldCheck size={19}/></div><div className="connection-copy"><strong>{item.label}</strong><span>{item.description}</span><small className={`connection-state ${state.state}`}><i/>{connectionLabel[state.state]}{state.detail ? ` · ${state.detail}` : ''}</small></div><div className="connection-actions"><button className="login-link" disabled={state.state === 'checking' || state.state === 'connected'} onClick={() => void login(site)} aria-label={`连接 ${item.label}`}><LogIn size={14}/> {state.state === 'connected' ? '已连接' : state.state === 'checking' ? '自动连接中…' : state.state === 'login_pending' ? '继续验证' : '连接'}</button><button className="check-link" onClick={() => check(site)} disabled={isChecking}>{isChecking ? <RefreshCw size={13} className="spin"/> : <Link2 size={13}/>} 检查连接</button><a href={item.url} target="_blank" rel="noreferrer" aria-label={`打开 ${item.label}`}><ExternalLink size={14}/></a></div></article>
     })}</div>
     <div className="connection-note"><CircleAlert size={15}/><span>桌面版会复用持久化的 HKU 官方会话；首次登录或会话过期时会显示官方窗口完成 2FA。MyHKU 只读取页面上显示的只读字段，密码由桌面版系统安全存储保护。</span></div>
   </section>
@@ -117,9 +118,10 @@ function App() {
       if (!active) return
       if (!status) { setAuthReady(true); setAccountConfigured(true); setAuthState('ready'); setAuthDetail('浏览器预览模式') ; return }
       setAccountConfigured(Boolean(status.configured)); setAccount({ username: status.localUsername, email: status.email }); setAuthState(status.authState || (status.configured ? 'ready' : 'setup')); setAuthDetail(status.detail || (status.configured ? '已保存账户，正在尝试登录' : '请先创建账户')); setAuthReady(true)
+      if (status.sessions) setConnections(applyDesktopSessions(status.sessions))
     }
     load().catch(() => { if (active) { setAuthReady(true); setAuthState('error'); setAuthDetail('无法读取本地账户状态') } })
-    const stop = window.myhkuDesktop?.onAuthStatus?.(payload => { if (!active || !payload) return; const state = payload.state || 'checking'; setAuthState(state); setAuthDetail(payload.detail || ''); if (state === 'connected' || state === 'ready' || state === 'needs_2fa') setAccountConfigured(true) })
+    const stop = window.myhkuDesktop?.onAuthStatus?.(payload => { if (!active || !payload) return; const state = payload.state || 'checking'; setAuthState(state); setAuthDetail(payload.detail || ''); if (payload.sessions) setConnections(applyDesktopSessions(payload.sessions)); if (state === 'connected' || state === 'ready' || state === 'needs_2fa') setAccountConfigured(true) })
     return () => { active = false; stop?.() }
   }, [])
   const sync = (refreshOfficialPages = true) => {
@@ -166,9 +168,9 @@ function App() {
           if (Date.now() < deadline) await new Promise(resolve => window.setTimeout(resolve, 250))
         } while (Date.now() < deadline)
         if (latest) return latest
-        throw new Error('尚未收到 HKU 页面数据，请确认官方登录已完成')
+        throw new Error('尚未收到 HKU 页面数据，数据到达后会自动更新。')
       }
-      refresh.then(readSnapshot).then(async snapshot => ({ snapshot, states: await checkAllConnections() })).then(({ states, snapshot }) => { setConnections(states); setLiveSnapshot(snapshot); cacheSnapshot(snapshot); notifySnapshotChanges(snapshot); setLiveError(''); finish(snapshot.fetchedAt === previousFetchedAt ? '已读取现有真实数据，页面仍在更新' : '真实数据同步完成', true, snapshot.fetchedAt) }).catch(error => { const detail = error instanceof Error ? error.message : '真实数据同步失败'; setLiveError(liveSnapshot ? `${detail} 当前显示上次成功同步的数据。` : detail); finish('真实数据同步失败，请检查设置中的连接状态', false) })
+      refresh.then(readSnapshot).then(async snapshot => ({ snapshot, states: await checkAllConnections() })).then(({ states, snapshot }) => { setConnections(states); setLiveSnapshot(snapshot); cacheSnapshot(snapshot); notifySnapshotChanges(snapshot); setLiveError(''); finish(snapshot.fetchedAt === previousFetchedAt ? '已读取现有真实数据，页面仍在更新' : '真实数据同步完成', true, snapshot.fetchedAt) }).catch(error => { const detail = error instanceof Error ? error.message : '真实数据同步失败'; setLiveError(liveSnapshot ? `${detail} 当前显示上次成功同步的数据。` : detail); finish(Object.values(getConnectionStates()).some(item => item.state === 'checking' || item.state === 'login_pending') ? '正在连接 HKU，完成后会自动同步数据' : '真实数据同步失败，请检查设置中的连接状态', false) })
     }
     else window.setTimeout(finish, 900)
   }
@@ -177,7 +179,8 @@ function App() {
     if (!authReady || !accountConfigured) return
     if (!started.current) {
       started.current = true
-      sync()
+      lastAttemptAt.current = Date.now()
+      sync(false)
     }
     // The main process emits this when an authenticated WebView has finished
     // parsing a page. Pull the normalized snapshot immediately without
@@ -188,25 +191,29 @@ function App() {
     })
     // Count attempts, not successful syncs: an unavailable bridge must not
     // trigger a network retry every minute. The interval only checks time.
+    const sessionTimer = window.setInterval(() => {
+      if (dataModeRef.current === 'live') void checkAllConnections().then(setConnections).catch(() => {})
+    }, 5000)
     const timer = window.setInterval(() => {
       if (Date.now() - lastAttemptAt.current >= 24 * 60 * 60 * 1000) syncRef.current()
     }, 60 * 1000)
-    return () => { stopListening?.(); window.clearInterval(timer) }
+    return () => { stopListening?.(); window.clearInterval(timer); window.clearInterval(sessionTimer) }
   }, [authReady, accountConfigured])
   const title = navItems.find(n => n.key === active)?.label ?? '概览'
   const connectedCount = Object.values(connections).filter(item => item.state === 'connected').length
+  const connectionPhase: ConnectionPhase = Object.values(connections).some(item => item.state === 'login_pending') ? 'manual' : Object.values(connections).some(item => item.state === 'checking') ? 'checking' : connectedCount > 0 ? 'connected' : 'disconnected'
   const accountLabel = dataMode === 'demo' ? '演示数据' : connectedCount === 3 ? '已安全连接' : connectedCount ? `${connectedCount}/3 个服务已连接` : '需要连接 HKU'
   const now = new Date()
   const today = { weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'long' }).format(now), date: `${now.getMonth() + 1} 月 ${now.getDate()} 日` }
   const filteredDue = useMemo(() => dueItems.filter(i => `${i.title}${i.course}`.toLowerCase().includes(query.toLowerCase())), [query])
   if (!authReady) return <div className="account-gate"><div className="account-loading"><RefreshCw size={22} className="spin"/> 正在准备 MyHKU…</div></div>
-  if (!accountConfigured) return <AccountSetup onReady={next => { setAccount(next); setAccountConfigured(true); setAuthState('needs_2fa'); setAuthDetail('请在 HKU 官方窗口完成首次 2FA；之后会自动登录') }} />
+  if (!accountConfigured) return <AccountSetup onReady={next => { setAccount(next); setAccountConfigured(true); setAuthState('checking'); setAuthDetail('正在自动登录，需要验证时会显示官方窗口') }} />
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
       <div className="brand"><div className="brand-mark">▣</div><span>My<span>HKU</span></span><button className="close-nav" onClick={() => setMobileNav(false)}><X size={18}/></button></div>
       <div className="workspace"><span className="workspace-label">当前空间</span><strong>学习空间</strong><ChevronDown size={15}/></div>
       <nav>{navItems.map(({ key, label, icon: Icon }) => <button key={key} className={active === key ? 'active' : ''} onClick={() => { setActive(key); setMobileNav(false) }}><Icon size={18}/><span>{label}</span>{key === 'moodle' && <i className="nav-dot"/>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="login-state"><span className={`state-dot ${dataMode === 'live' && connectedCount === 0 ? 'offline' : ''}`}/> <div><small>HKU 账号</small><strong>{authState === 'needs_2fa' || authState === 'login_pending' ? '等待完成 2FA' : accountLabel}</strong></div></div><button className="user-mini"><span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span><span>{account.username || '用户'}</span><ChevronDown size={14}/></button></div>
+      <div className="sidebar-bottom"><div className="login-state"><span className={`state-dot ${dataMode === 'live' && connectedCount === 0 ? 'offline' : ''}`}/> <div><small>HKU 账号</small><strong>{authState === 'needs_2fa' ? '等待身份验证' : Object.values(connections).some(item => item.state === 'checking') ? '正在自动连接 HKU' : accountLabel}</strong></div></div><button className="user-mini"><span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span><span>{account.username || '用户'}</span><ChevronDown size={14}/></button></div>
     </aside>
     {mobileNav && <div className="backdrop" onClick={() => setMobileNav(false)}/>} 
     <main className="main">
@@ -215,12 +222,12 @@ function App() {
       {notice && <div className={`toast ${refreshing ? 'loading' : 'success'}`}>{refreshing ? <RefreshCw className="spin" size={15}/> : <CheckCircle2 size={15}/>} {notice}</div>}
       <div className="content">
         <div className="page-heading"><div><p className="eyebrow">{today.weekday} · {today.date}</p><h1>早上好，{account.username || '同学'} <span>✦</span></h1><p className="subtitle">这是你今天的学习概览。</p></div><button className="refresh-btn" onClick={() => sync()} disabled={refreshing}><RefreshCw size={16} className={refreshing ? 'spin' : ''}/>{refreshing ? '同步中…' : '立即刷新'}</button></div>
-        <div className="sync-line"><span><CheckCircle2 size={14}/> {dataMode === 'live' && liveError && liveSnapshot ? '显示本地缓存' : '数据已同步'}</span><span>上次更新 {lastSync}</span><span className="sync-policy">打开应用时刷新 · 每日自动更新一次</span></div>
+        <div className="sync-line"><span><CheckCircle2 size={14}/> {dataMode === 'live' && !liveSnapshot ? '等待自动同步' : dataMode === 'live' && liveError && liveSnapshot ? '显示本地缓存' : '数据已同步'}</span><span>上次更新 {lastSync}</span><span className="sync-policy">打开应用时刷新 · 每日自动更新一次</span></div>
         {active === 'overview' ? dataMode === 'demo' ? <>
           <section className="stats"><div className="stat-card"><div className="stat-icon blue"><CalendarDays size={18}/></div><div><small>今日课程</small><strong>2 节</strong></div><span className="stat-trend">+1 比昨天</span></div><div className="stat-card"><div className="stat-icon amber"><Clock3 size={18}/></div><div><small>待完成</small><strong>3 项</strong></div><span className="stat-trend amber-text">1 项今天截止</span></div><div className="stat-card"><div className="stat-icon green"><Trophy size={18}/></div><div><small>当前平均成绩</small><strong>86.4 <em>/ 100</em></strong></div><span className="stat-trend green-text">↑ 2.1</span></div></section>
           <div className="dashboard-grid"><section className="panel schedule"><div className="panel-head"><div><h2>今日课表</h2><p>{today.date}，{today.weekday}</p></div><button className="text-btn" onClick={() => setActive('calendar')}>查看完整课表 <span>→</span></button></div><div className="class-list">{classes.map(c => <article className="class-item" key={c.code}><div className={`class-time ${c.tone}`}><strong>{c.time}</strong><span>{c.end}</span></div><div className="class-info"><h3>{c.title}</h3><p>{c.code} <span>·</span> {c.teacher}</p></div><div className="room">{c.room}</div></article>)}</div></section><section className="panel deadlines"><div className="panel-head"><div><h2>近期截止</h2><p>来自 Moodle 的待办</p></div><button className="dots">•••</button></div><div className="due-list">{filteredDue.map(i => <article className="due-item" key={i.title}><span className={`due-check ${i.urgent ? 'urgent' : ''}`}>{i.urgent ? '!' : ''}</span><div><h3>{i.title}</h3><p>{i.course}</p></div><time className={i.urgent ? 'urgent-text' : ''}>{i.due}</time></article>)}</div><button className="all-tasks" onClick={() => setActive('moodle')}>查看全部待办 <span>→</span></button></section></div>
           <section className="panel quick"><div className="quick-title"><Sparkles size={18}/><div><h2>学习快捷入口</h2><p>从上次离开的地方继续</p></div></div><div className="quick-actions"><button onClick={() => setActive('moodle')}><BookOpen size={17}/><span>Moodle 课程</span><small>3 门课程</small></button><button onClick={() => setActive('materials')}><Download size={17}/><span>最近资料</span><small>4 个未读</small></button><button onClick={() => setActive('calendar')}><CalendarDays size={17}/><span>本周课表</span><small>8 节课程</small></button></div></section>
-        </> : <LiveDataPage active={active} snapshot={liveSnapshot} error={liveError} onOpenSettings={() => setActive('settings')} onRefresh={sync}/> : active === 'settings' ? <ConnectionSettings mode={dataMode} setMode={mode => { setDataMode(mode); setDataModeState(mode) }} states={connections} setStates={setConnections} onNotice={message => { setNotice(message); window.setTimeout(() => setNotice(''), 4000) }}/> : <LiveDataPage active={active} snapshot={liveSnapshot} error={liveError} onOpenSettings={() => setActive('settings')} onRefresh={sync}/>}
+        </> : <LiveDataPage active={active} snapshot={liveSnapshot} error={liveError} connectionPhase={connectionPhase} onOpenSettings={() => setActive('settings')} onRefresh={sync}/> : active === 'settings' ? <ConnectionSettings mode={dataMode} setMode={mode => { setDataMode(mode); setDataModeState(mode) }} states={connections} setStates={setConnections} onNotice={message => { setNotice(message); window.setTimeout(() => setNotice(''), 4000) }}/> : <LiveDataPage active={active} snapshot={liveSnapshot} error={liveError} connectionPhase={connectionPhase} onOpenSettings={() => setActive('settings')} onRefresh={sync}/>}
       </div>
     </main>
   </div>
@@ -349,17 +356,25 @@ function CalendarPage({ snapshot, onRefresh }: { snapshot: LiveSnapshot; onRefre
     </>}
   </section>
 }
-function LiveDataPage({ active, snapshot, error, onOpenSettings, onRefresh }: { active: NavKey; snapshot: LiveSnapshot | null; error: string; onOpenSettings: () => void; onRefresh: () => void }) {
-  if (active === 'overview') return <LiveDataPlaceholder snapshot={snapshot} error={error} onOpenSettings={onOpenSettings} onRefresh={onRefresh}/>
-  if (!snapshot) return <LiveDataPlaceholder snapshot={null} error={error} onOpenSettings={onOpenSettings} onRefresh={onRefresh}/>
+function LiveDataPage({ active, snapshot, error, connectionPhase, onOpenSettings, onRefresh }: { active: NavKey; snapshot: LiveSnapshot | null; error: string; connectionPhase: ConnectionPhase; onOpenSettings: () => void; onRefresh: () => void }) {
+  if (active === 'overview') return <LiveDataPlaceholder snapshot={snapshot} error={error} connectionPhase={connectionPhase} onOpenSettings={onOpenSettings} onRefresh={onRefresh}/>
+  if (!snapshot) return <LiveDataPlaceholder snapshot={null} error={error} connectionPhase={connectionPhase} onOpenSettings={onOpenSettings} onRefresh={onRefresh}/>
   if (active === 'calendar') {
     return <CalendarPage snapshot={snapshot} onRefresh={onRefresh}/>
   }
   if (active === 'moodle') return <section className="panel live-page"><div className="panel-head"><div><h2>Moodle</h2><p>{snapshot.courses.length} 门课程 · {snapshot.assignments.filter(item => !item.completed).length} 项待办 · {snapshot.grades.length} 项成绩</p></div><button className="text-btn" onClick={onRefresh}><RefreshCw size={13}/>刷新</button></div><div className="live-columns"><div><h3 className="subheading">课程</h3>{snapshot.courses.length ? snapshot.courses.map(item => <div className="live-row" key={item.id}><BookOpen size={15}/><span>{item.title}{item.code ? ` · ${item.code}` : ''}</span></div>) : <p className="empty-state">暂无课程</p>}</div><div><h3 className="subheading">待办</h3>{snapshot.assignments.length ? snapshot.assignments.map(item => <div className="live-row" key={item.id}><span className={`due-check ${item.completed ? 'done' : ''}`}>{item.completed ? '✓' : ''}</span><span>{item.title}<small>{item.course}{item.due ? ` · ${item.due}` : ''}</small></span></div>) : <p className="empty-state">暂无待办</p>}</div><div><h3 className="subheading">成绩</h3>{snapshot.grades.length ? snapshot.grades.map(item => <div className="live-row" key={item.id}><Trophy size={15}/><span>{item.title}<small>{item.course} · {item.released === false ? '未发布' : item.value || '未提供分数'}</small></span></div>) : <p className="empty-state">暂无可见成绩</p>}</div></div><div className="live-announcements"><h3 className="subheading">公告</h3>{snapshot.announcements.length ? snapshot.announcements.slice(0, 8).map(item => <div className="live-row" key={item.id}><Bell size={15}/><span>{item.url ? <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> : item.title}<small>{item.course}{item.published ? ` · ${item.published}` : ''}</small></span></div>) : <p className="empty-state">暂无公告</p>}</div></section>
   return <section className="panel live-page"><div className="panel-head"><div><h2>课程资料</h2><p>来自 Moodle 的真实资料 · 点击后在官方页面打开或下载</p></div><button className="text-btn" onClick={onRefresh}><RefreshCw size={13}/>刷新</button></div><div className="resource-list">{snapshot.resources.length ? snapshot.resources.map(item => { const url = safeHkuUrl(item.url); return <div className="resource-row" key={item.id}><FileText size={16}/><span><strong>{item.title}</strong><small>{item.course}</small></span>{url ? <a href={url} target="_blank" rel="noreferrer"><Download size={14}/>下载</a> : <em>无链接</em>}</div> }) : <p className="empty-state">暂无可下载资料</p>}</div></section>
 }
-function LiveDataPlaceholder({ snapshot, error, onOpenSettings, onRefresh }: { snapshot: LiveSnapshot | null; error: string; onOpenSettings: () => void; onRefresh: () => void }) {
-  if (!snapshot) return <section className="panel placeholder live-placeholder"><div className="placeholder-icon"><ShieldCheck size={25}/></div><h2>真实数据尚未连接</h2><p>{error || '完成 HKU 官方 SSO/MFA 后，在设置中检查 Portal、SIS 和 Moodle 连接。连接成功后，刷新才会读取你的真实课表和 Moodle 数据。'}</p><div className="placeholder-actions"><button className="refresh-btn" onClick={onOpenSettings}><Link2 size={16}/>管理连接</button><button className="outline-btn" onClick={onRefresh}><RefreshCw size={15}/>重新检查</button></div></section>
+function LiveDataPlaceholder({ snapshot, error, connectionPhase, onOpenSettings, onRefresh }: { snapshot: LiveSnapshot | null; error: string; connectionPhase: ConnectionPhase; onOpenSettings: () => void; onRefresh: () => void }) {
+  if (!snapshot) {
+    const automatic = connectionPhase === 'checking' || connectionPhase === 'connected'
+    const heading = connectionPhase === 'checking' ? '正在自动连接 HKU' : connectionPhase === 'connected' ? 'HKU 已连接，正在读取数据' : connectionPhase === 'manual' ? '等待官方身份验证' : '等待连接 HKU'
+    const detail = connectionPhase === 'checking' ? '正在复用官方登录会话，完成后会自动显示课表和课程。'
+      : connectionPhase === 'connected' ? (error || '登录已完成，课表和课程读取后会自动显示。')
+      : connectionPhase === 'manual' ? '请在官方窗口完成验证，完成后会自动连接并同步数据。'
+      : error || '应用会自动恢复官方会话；可在设置中查看各服务状态。'
+    return <section className="panel placeholder live-placeholder"><div className="placeholder-icon">{automatic ? <RefreshCw size={25} className="spin"/> : <ShieldCheck size={25}/>}</div><h2>{heading}</h2><p>{detail}</p><div className="placeholder-actions"><button className="outline-btn" onClick={onOpenSettings}><Link2 size={16}/>查看连接状态</button>{!automatic && <button className="outline-btn" onClick={onRefresh}><RefreshCw size={15}/>重新检查</button>}</div></section>
+  }
   const classesLive = snapshot.schedule.filter(isTodaySchedule).slice(0, 3)
   const dueLive = snapshot.assignments.filter(item => !item.completed).slice(0, 4)
   return <><section className="stats"><div className="stat-card"><div className="stat-icon blue"><CalendarDays size={18}/></div><div><small>今日课程</small><strong>{classesLive.length} 节</strong></div></div><div className="stat-card"><div className="stat-icon amber"><Clock3 size={18}/></div><div><small>待完成</small><strong>{dueLive.length} 项</strong></div></div><div className="stat-card"><div className="stat-icon green"><Trophy size={18}/></div><div><small>已获取成绩</small><strong>{snapshot.grades.length} 项</strong></div></div></section><div className="dashboard-grid"><section className="panel schedule"><div className="panel-head"><div><h2>课表</h2><p>来自 SIS 的真实数据</p></div></div><div className="class-list">{classesLive.length ? classesLive.map(item => <article className="class-item" key={item.id}><div className="class-time blue"><strong>{item.start}</strong><span>{item.end}</span></div><div className="class-info"><h3>{item.title}</h3><p>{item.code || '未提供课程代码'} <span>·</span> {item.teacher || '未提供教师'}</p></div><div className="room">{item.room || '未提供地点'}</div></article>) : <p className="empty-state">本次同步没有课表记录</p>}</div></section><section className="panel deadlines"><div className="panel-head"><div><h2>待办</h2><p>来自 Moodle 的真实数据</p></div></div><div className="due-list">{dueLive.length ? dueLive.map(item => <article className="due-item" key={item.id}><span className="due-check"/><div><h3>{item.title}</h3><p>{item.course}</p></div><time>{item.due || '未设置截止时间'}</time></article>) : <p className="empty-state">暂无未完成待办</p>}</div></section></div></>
