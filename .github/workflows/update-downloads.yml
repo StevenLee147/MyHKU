@@ -1,0 +1,44 @@
+name: Update README downloads
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: readme-downloads
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify README updater
+        run: node --test scripts/update-readme-downloads.test.mjs
+      - name: Update download links from published release assets
+        run: node scripts/update-readme-downloads.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Commit README changes
+        run: |
+          if git diff --quiet -- README.md; then
+            echo "README downloads are already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: update latest release downloads"
+          git pull --rebase origin main
+          git push origin HEAD:main
