@@ -21,7 +21,9 @@ jobs:
       - run: npm run desktop:package
         env: { MYHKU_RELEASE_DIR: release/desktop }
       - uses: actions/upload-artifact@v4
-        with: { name: desktop-${{ matrix.os }}, path: release/desktop }
+        with:
+          name: desktop-${{ matrix.os }}
+          path: release/desktop
 
   android:
     runs-on: ubuntu-latest
