@@ -124,4 +124,3 @@ jobs:
             - `SHA256SUMS.txt` 可用于核对下载完整性。
           files: |
             release/**
-            release/SHA256SUMS.txt
