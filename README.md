@@ -1,6 +1,6 @@
 # MyHKU dashboard
 
-基于 Vite、React 和 TypeScript 的桌面/手机响应式仪表盘。已接入 HKU 官方登录入口：Portal/SIS 使用 `https://studentportal.hku.hk/`，Moodle 使用 CAS 登录地址。登录仍由用户在官方页面完成；页面不会读取密码或 Cookie。
+基于 Vite、React 和 TypeScript 的桌面/手机响应式仪表盘。已接入 HKU 官方登录入口：Portal/SIS 使用 `https://studentportal.hku.hk/`，Moodle 使用 CAS 登录地址。首次使用创建本地账户并完成一次官方 2FA；之后桌面端自动复用会话并尝试后台登录。
 
 ## 运行
 
@@ -49,11 +49,11 @@ npm run android:release     # release APK/AAB（配置签名后）
 
 GitHub Actions 的 Android release 签名使用以下 secrets：`MYHKU_ANDROID_KEYSTORE_BASE64`、`MYHKU_ANDROID_KEY_ALIAS`、`MYHKU_ANDROID_KEYSTORE_PASSWORD`、`MYHKU_ANDROID_KEY_PASSWORD`。仓库不保存 keystore；没有签名环境时仍可构建 unsigned release 供内测，正式分发前必须配置 secrets。Windows 和 macOS 桌面安装包在对应 runner 上构建，macOS 公证或代码签名可在仓库 secrets 配置后再接入 electron-builder 的签名变量。
 
-产物默认写入系统临时目录 `MyHKU-release/`（可用 `MYHKU_RELEASE_DIR` 指定输出目录）。安装包首次启动仍由用户在官方 HKU 登录窗口完成 SSO/MFA；应用不提供代填密码或绕过认证的路径。
+产物默认写入系统临时目录 `MyHKU-release/`（可用 `MYHKU_RELEASE_DIR` 指定输出目录）。安装包首次启动会先显示账户向导；账户保存后在官方 HKU 登录窗口完成 SSO/MFA。应用只在受限的官方窗口中自动填充常规登录字段，不绕过 2FA。
 
 桌面端会自动启动 loopback bridge，并在独立的 HKU 登录窗口中打开 Portal/Moodle。登录窗口使用 Electron 的 `persist:myhku-hku` 会话分区，因此有效的 SSO/MFA 会话会在应用重启后保留；密码、Cookie 和令牌不会传给仪表盘或 bridge。规范化课表、课程、作业、资料、公告和成绩缓存使用 Electron `safeStorage` 保护的密钥加密保存；若操作系统没有可用的安全存储，应用只保留内存缓存并提示需要重新同步。登录完成后，在官方页面停留或刷新一次，内置连接器会将页面中可见的只读课程字段同步到本机 bridge。只有 HKU 与微软登录域名允许在该窗口中导航。
 
-首次启动应用会直接显示 Portal 和 Moodle 官方窗口；之后应用从仪表盘“设置”页打开登录窗口。调试时可用 `MYHKU_OPEN_LOGIN_ON_STARTUP=1 npm run desktop` 强制再次显示两个官方窗口。
+首次启动应用会先显示本地账户向导；保存账户后打开 Portal、Moodle 官方窗口，完成首次 2FA 后窗口会在后台保持会话。之后启动会隐藏打开认证页，只有会话过期或需要 2FA 时才显示窗口。调试时可用 `MYHKU_OPEN_LOGIN_ON_STARTUP=1 npm run desktop` 强制再次显示官方窗口。
 
 保持桥接进程运行后，在另一个终端执行：
 

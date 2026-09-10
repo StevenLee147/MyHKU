@@ -21,6 +21,7 @@ const SITES = new Set(['portal', 'sis', 'moodle'])
 const ARRAY_FIELDS = ['schedule', 'courses', 'assignments', 'resources', 'grades', 'announcements']
 const snapshot = {
   fetchedAt: null,
+  scheduleWeek: null,
   schedule: [],
   courses: [],
   assignments: [],
@@ -43,7 +44,7 @@ function decodeCacheKey(value) {
 }
 
 function cachePayload() {
-  return JSON.stringify({ fetchedAt: snapshot.fetchedAt, ...Object.fromEntries(ARRAY_FIELDS.map(field => [field, snapshot[field]])) })
+  return JSON.stringify({ fetchedAt: snapshot.fetchedAt, scheduleWeek: snapshot.scheduleWeek, ...Object.fromEntries(ARRAY_FIELDS.map(field => [field, snapshot[field]])) })
 }
 
 function loadEncryptedCache() {
@@ -55,6 +56,7 @@ function loadEncryptedCache() {
     const data = JSON.parse(Buffer.concat([decipher.update(Buffer.from(record.data, 'base64')), decipher.final()]).toString('utf8'))
     if (!data || typeof data !== 'object') return
     for (const field of ARRAY_FIELDS) if (Array.isArray(data[field])) snapshot[field] = data[field]
+    if (data.scheduleWeek && typeof data.scheduleWeek === 'object' && typeof data.scheduleWeek.start === 'string' && typeof data.scheduleWeek.end === 'string') snapshot.scheduleWeek = { start: data.scheduleWeek.start.slice(0, 20), end: data.scheduleWeek.end.slice(0, 20) }
     snapshot.fetchedAt = typeof data.fetchedAt === 'string' ? data.fetchedAt : null
   } catch { /* absent or invalid cache is treated as empty */ }
 }
@@ -90,7 +92,7 @@ function isTrustedOrigin(origin) {
   if (isLocalOrigin(origin)) return true
   try {
     const url = new URL(origin)
-    return url.protocol === 'https:' && ['moodle.hku.hk', 'studentportal.hku.hk', 'hkuportal.hku.hk'].includes(url.hostname)
+    return url.protocol === 'https:' && ['moodle.hku.hk', 'studentportal.hku.hk', 'hkuportal.hku.hk', 'sis-main.hku.hk', 'sweb.hku.hk', 'intraweb.hku.hk'].includes(url.hostname)
   } catch { return false }
 }
 
@@ -287,13 +289,14 @@ const server = http.createServer(async (req, res) => {
           changed += values.length
         }
       }
+      if (payload.scheduleWeek && typeof payload.scheduleWeek === 'object' && typeof payload.scheduleWeek.start === 'string' && typeof payload.scheduleWeek.end === 'string') snapshot.scheduleWeek = { start: payload.scheduleWeek.start.slice(0, 20), end: payload.scheduleWeek.end.slice(0, 20) }
       const now = new Date().toISOString()
       const connected = typeof payload.connected === 'boolean' ? payload.connected : true
       if (connected && ARRAY_FIELDS.some(field => Array.isArray(payload[field]))) snapshot.fetchedAt = now
       sessions[site] = { connected, checkedAt: now, detail: clean(payload.detail, 240) || `已从 ${site} 登录页面同步` }
       // Portal is the normal entry point for SIS. A schedule extracted from
       // that page proves the SIS session is usable as well.
-      if (site === 'portal' && connected && Array.isArray(payload.schedule)) {
+      if (site === 'portal' && connected && Array.isArray(payload.schedule) && payload.schedule.length > 0) {
         sessions.sis = { connected: true, checkedAt: now, detail: '已从 Portal 页面同步课表' }
       }
       saveEncryptedCache()

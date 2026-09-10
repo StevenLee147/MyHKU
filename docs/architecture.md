@@ -42,13 +42,13 @@ flowchart TD
 
 ## 3. 登录与安全存储
 
-当前 UI 已配置官方入口：Portal/SIS 从 `https://studentportal.hku.hk/` 开始（学校会继续跳转 Microsoft Entra OIDC），Moodle 使用 `https://moodle.hku.hk/login/index.php?authCAS=CAS`。前端的“官方登录”按钮只打开这些地址并记录“等待完成登录”；“检查连接”调用可选的本地桥接接口，不尝试在浏览器中抓取或模拟 SSO。
+当前 UI 已配置官方入口：Portal/SIS 从 `https://studentportal.hku.hk/` 开始（学校会继续跳转 Microsoft Entra OIDC），Moodle 使用 `https://moodle.hku.hk/login/index.php?authCAS=CAS`。首次使用时先创建本地账户；桌面端把凭据交给 Electron `safeStorage`，后台在受限的持久化官方 WebView 中自动填充常规登录步骤。2FA、验证码和无法识别的页面始终留给用户在官方窗口完成。
 
 浏览器预览通过 `VITE_HKU_BRIDGE_URL` 连接原生桥接服务。桥接暴露 `GET /api/session/{site}` 这一最小状态接口，真实的 WebView 会话、安全存储和 SIS/Moodle 只读适配器属于原生层；未配置桥接时真实模式必须显示不可用原因。
 
 - 登录页面通过受限制的独立远程 WebView 显示，本地仪表盘使用自身上下文；学校网页没有文件系统、数据库、密钥或任意 Rust 命令的调用权限。
 - SSO 所需站点会话按实际登录链组织，确保必要跳转可共享会话，同时限制不相关导航。允许域列表依据观察到的官方认证链配置。
-- 学校登录密码由用户交给官方页面。MyHKU 不读取或保存密码，不自动填充密码。
+- 学校登录密码只保存在桌面端 `safeStorage` 加密文件中，不进入 React、localStorage、桥接服务或数据快照；自动登录脚本只向允许的 HKU/Microsoft 官方页面填充并提交表单。
 - 应用持有的 Cookie/Token 等秘密只由受限制的会话服务访问，不返回仪表盘 JavaScript，也不写入日志。
 - Windows/macOS 用系统安全存储保护应用密钥；Android Keystore 持有密钥，以密文保存应用需要的秘密。
 - 系统 WebView 自身的 Cookie 数据库受浏览器引擎控制，需验证其磁盘保护、Profile 隔离、退出清理及恢复机制。“密钥放进钥匙串”不等于“全部浏览器缓存加密”。

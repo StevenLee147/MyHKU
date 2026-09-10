@@ -1,9 +1,9 @@
 /**
  * HKU connection primitives used by the dashboard.
  *
- * The browser UI never receives a password or a Cookie. The development
- * interface is backed by the Chrome extension's local bridge (configured
- * with VITE_HKU_BRIDGE_URL). Opening a school's page remains the official way to
+ * The browser UI never receives a password or a Cookie. The dashboard reads
+ * normalized fields from the local bridge (configured with
+ * VITE_HKU_BRIDGE_URL). Opening a school's page remains the official way to
  * complete SSO/MFA, so this module deliberately does not try to automate it.
  */
 
@@ -26,10 +26,9 @@ export const HKU_SITES: Record<HkuSite, { label: string; description: string; ur
   sis: {
     label: 'SIS',
     description: '从已登录的 SIS 获取课表',
-    // SIS is reached from the portal for many accounts. Keep this URL
-    // configurable through the local bridge instead of guessing a private
-    // endpoint here.
-    url: 'https://studentportal.hku.hk/',
+    // Official PeopleSoft timetable page. The user still completes SSO/MFA
+    // in the official browser session before the connector reads the page.
+    url: 'https://sis-main.hku.hk/psp/sisprod/EMPLOYEE/PSFT_CS/c/SA_LEARNER_SERVICES.SSR_SSENRL_SCHD_W.GBL?pslnkid=Z_HC_SSR_SSENRL_SCHD_W_LNK',
   },
   moodle: {
     label: 'HKU Moodle',
@@ -115,13 +114,13 @@ function nativeSession(site: HkuSite): SiteConnection | null {
 
 /**
  * Ask the local bridge whether it has received data from a logged-in page.
- * This does not validate or expose Chrome's authentication session.
+ * This does not validate or expose the native authentication session.
  */
 export async function checkConnection(site: HkuSite): Promise<SiteConnection> {
   const native = nativeSession(site)
   if (native) { save({ ...getConnectionStates(), [site]: native }); return native }
   if (!bridgeBase) {
-    const result = { state: 'error' as const, detail: '请配置 MyHKU 本地桥接地址并加载 Chrome 扩展' }
+    const result = { state: 'error' as const, detail: 'MyHKU 本地数据服务不可用，请重新打开应用后重试' }
     save({ ...getConnectionStates(), [site]: result })
     return result
   }
@@ -153,6 +152,7 @@ export async function checkAllConnections() {
 export type LiveSnapshot = {
   fetchedAt: string
   schedule: LiveClass[]
+  scheduleWeek?: { start: string; end: string }
   courses: LiveCourse[]
   assignments: LiveAssignment[]
   resources: LiveResource[]
@@ -176,6 +176,7 @@ export async function fetchLiveSnapshot(signal?: AbortSignal): Promise<LiveSnaps
         return {
           fetchedAt: native.fetchedAt || native.capturedAt || new Date().toISOString(),
           schedule: Array.isArray(native.schedule) ? native.schedule : [],
+          ...(native.scheduleWeek && typeof native.scheduleWeek.start === 'string' && typeof native.scheduleWeek.end === 'string' ? { scheduleWeek: native.scheduleWeek } : {}),
           courses: Array.isArray(native.courses) ? native.courses : [],
           assignments: Array.isArray(native.assignments) ? native.assignments : [],
           resources: Array.isArray(native.resources) ? native.resources : [],
@@ -185,16 +186,17 @@ export async function fetchLiveSnapshot(signal?: AbortSignal): Promise<LiveSnaps
       }
     }
   } catch { /* native bridge may not be present or may have no data */ }
-  if (!bridgeBase) throw new Error('请配置 MyHKU 本地桥接地址并加载 Chrome 扩展')
+  if (!bridgeBase) throw new Error('MyHKU 本地数据服务不可用，请重新打开应用后重试')
   const response = await fetch(`${bridgeBase}/api/snapshot`, { credentials: 'omit', signal })
   if (!response.ok) throw new Error(`桥接同步失败（HTTP ${response.status}）`)
   const payload = await response.json() as Partial<LiveSnapshot>
   if (typeof payload.fetchedAt !== 'string' || Number.isNaN(Date.parse(payload.fetchedAt))) {
-    throw new Error('本地桥接尚未收到页面数据。请在 Chrome 加载 MyHKU 扩展，并刷新已登录的 HKU 页面。')
+    throw new Error('尚未收到 HKU 页面数据。请在应用内完成官方登录，再点击立即刷新。')
   }
   return {
     fetchedAt: payload.fetchedAt,
     schedule: Array.isArray(payload.schedule) ? payload.schedule : [],
+    ...(payload.scheduleWeek && typeof payload.scheduleWeek.start === 'string' && typeof payload.scheduleWeek.end === 'string' ? { scheduleWeek: payload.scheduleWeek } : {}),
     courses: Array.isArray(payload.courses) ? payload.courses : [],
     assignments: Array.isArray(payload.assignments) ? payload.assignments : [],
     resources: Array.isArray(payload.resources) ? payload.resources : [],
@@ -215,6 +217,7 @@ export function getCachedSnapshot(): LiveSnapshot | null {
     return {
       fetchedAt: parsed.fetchedAt,
       schedule: Array.isArray(parsed.schedule) ? parsed.schedule : [],
+      ...(parsed.scheduleWeek && typeof parsed.scheduleWeek.start === 'string' && typeof parsed.scheduleWeek.end === 'string' ? { scheduleWeek: parsed.scheduleWeek } : {}),
       courses: Array.isArray(parsed.courses) ? parsed.courses : [],
       assignments: Array.isArray(parsed.assignments) ? parsed.assignments : [],
       resources: Array.isArray(parsed.resources) ? parsed.resources : [],

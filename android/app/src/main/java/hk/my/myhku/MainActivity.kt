@@ -30,7 +30,9 @@ class MainActivity : AppCompatActivity() {
 
     private val allowedHosts = setOf(
         "moodle.hku.hk", "studentportal.hku.hk", "hkuportal.hku.hk",
-        "login.microsoftonline.com"
+        "sis-main.hku.hk", "sweb.hku.hk", "intraweb.hku.hk", "adfs.connect.hku.hk",
+        "login.microsoftonline.com", "login.microsoft.com", "login.windows.net",
+        "login.live.com", "account.live.com", "account.microsoft.com"
     )
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -180,7 +182,7 @@ class MainActivity : AppCompatActivity() {
             val site = when (source) {
                 "moodle.hku.hk" -> "moodle"
                 "studentportal.hku.hk" -> "portal"
-                "hkuportal.hku.hk" -> "sis"
+                "hkuportal.hku.hk", "sis-main.hku.hk", "sweb.hku.hk", "intraweb.hku.hk" -> "sis"
                 else -> "latest"
             }
             sitePayloads[site] = latestPayload
@@ -239,7 +241,7 @@ class MainActivity : AppCompatActivity() {
             val matches = when (site) {
                 "moodle" -> host == "moodle.hku.hk"
                 "portal" -> host == "studentportal.hku.hk"
-                "sis" -> host == "studentportal.hku.hk" || host == "hkuportal.hku.hk"
+                "sis" -> host == "studentportal.hku.hk" || host == "hkuportal.hku.hk" || host == "sis-main.hku.hk" || host == "sweb.hku.hk" || host == "intraweb.hku.hk"
                 else -> false
             }
             JSONObject()
@@ -274,7 +276,8 @@ class MainActivity : AppCompatActivity() {
                 document.querySelectorAll('a[href*="/mod/forum/"]').forEach(a=>{ const title=clean(a.textContent), href=safe(a.href); if(!title||!href||seen.announcements.has(href)) return; seen.announcements.add(href); payload.announcements.push({id:id('announcement',href),title,course:'未提供课程',url:href}); });
                 document.querySelectorAll('table.grades tr,table.user-grade tr').forEach(row=>{ const cells=[...row.querySelectorAll('th,td')].map(c=>clean(c.textContent)).filter(Boolean); if(cells.length<2) return; const title=cells[0]; if(!/(grade|score|mark|成绩|分数)/i.test(cells.join(' '))) return; const value=cells.slice(1).find(v=>/\d+(?:\.\d+)?/.test(v))||''; payload.grades.push({id:id('grade',title),title,course:'未提供课程',...(value?{value}:{})}); });
               } else {
-                document.querySelectorAll('table').forEach(table=>{ const headers=[...table.querySelectorAll('thead th')].map(c=>clean(c.textContent).toLowerCase()); [...table.querySelectorAll('tbody tr,tr')].forEach(row=>{ const cells=[...row.querySelectorAll('th,td')].map(c=>clean(c.textContent)); const whole=cells.join(' · '); const times=whole.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b/gi)||[]; if(cells.length<2||times.length<2) return; const find=patterns=>{const i=headers.findIndex(h=>patterns.some(p=>p.test(h)));return i>=0?cells[i]:''}; const title=find([/course|subject|class|课程|科目/])||cells[0]; const code=find([/code|编号/]); const room=find([/room|location|venue|地点|教室/]); const teacher=find([/teacher|instructor|lecturer|教师|老师/]); payload.schedule.push({id:id('class',title+times[0]+times[1]),title, ...(code?{code}:{}),start:times[0],end:times[1],...(room?{room}:{}),...(teacher?{teacher}:{})}); }); });
+                const rootDocs=[document]; document.querySelectorAll('iframe').forEach(frame=>{try{if(frame.contentDocument) rootDocs.push(frame.contentDocument)}catch(_){}});
+                rootDocs.flatMap(root=>[...root.querySelectorAll('table')]).forEach(table=>{ const headers=[...table.querySelectorAll('thead th')].map(c=>clean(c.textContent).toLowerCase()); [...table.querySelectorAll('tbody tr,tr')].forEach(row=>{ const cells=[...row.querySelectorAll('th,td')].map(c=>clean(c.textContent)); const whole=cells.join(' · '); const times=whole.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b/gi)||[]; if(cells.length<2||times.length<2) return; const find=patterns=>{const i=headers.findIndex(h=>patterns.some(p=>p.test(h)));return i>=0?cells[i]:''}; const title=find([/course|subject|class|课程|科目/])||cells[0]; const code=find([/code|编号/]); const room=find([/room|location|venue|地点|教室/]); const teacher=find([/teacher|instructor|lecturer|教师|老师/]); payload.schedule.push({id:id('class',title+times[0]+times[1]),title, ...(code?{code}:{}),start:times[0],end:times[1],...(room?{room}:{}),...(teacher?{teacher}:{})}); }); });
               }
               window.MyHKU.ingest(JSON.stringify(payload));
             })();

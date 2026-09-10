@@ -1,7 +1,7 @@
 {
   "name": "myhku-dashboard",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.0-alpha",
   "description": "HKU Portal, SIS and Moodle learning dashboard",
   "author": "MyHKU",
   "main": "desktop/main.mjs",
@@ -18,8 +18,8 @@
     "bridge:cdp:test": "node bridge/cdp.mjs --self-test",
     "desktop:dev": "npm run build && electron desktop/main.mjs",
     "desktop": "electron desktop/main.mjs",
-    "desktop:package": "npm run build && node scripts/package-desktop.mjs"
-    ,"android:debug": "npm run build && android\\gradlew.bat --project-dir android :app:assembleDebug",
+    "desktop:package": "npm run build && node scripts/package-desktop.mjs",
+    "android:debug": "npm run build && android\\gradlew.bat --project-dir android :app:assembleDebug",
     "android:release": "npm run build && android\\gradlew.bat --project-dir android :app:bundleRelease",
     "release:stage": "node scripts/stage-release.mjs"
   },
@@ -41,10 +41,30 @@
     "appId": "hk.my.myhku",
     "productName": "MyHKU",
     "asar": true,
-    "asarUnpack": ["bridge/**/*"],
-    "files": ["dist/**/*", "desktop/**/*", "bridge/**/*", "extension/**/*", "package.json"],
-    "directories": { "output": "dist-electron" },
-    "win": { "target": ["nsis", "portable"] },
-    "mac": { "target": ["dmg", "zip"] }
+    "asarUnpack": [
+      "bridge/**/*"
+    ],
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "bridge/**/*",
+      "extension/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist-electron"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    }
   }
 }

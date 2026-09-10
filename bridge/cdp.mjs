@@ -24,10 +24,11 @@ const DEFAULT_CDP_PORT = 9222
 const DEFAULT_BRIDGE_PORT = 17321
 const DEFAULT_WATCH_MS = 5000
 const DEFAULT_REFRESH_MS = 24 * 60 * 60 * 1000
-const ALLOWED_HOSTS = new Set(['moodle.hku.hk', 'studentportal.hku.hk', 'hkuportal.hku.hk'])
+const ALLOWED_HOSTS = new Set(['moodle.hku.hk', 'studentportal.hku.hk', 'hkuportal.hku.hk', 'sis-main.hku.hk', 'sweb.hku.hk', 'intraweb.hku.hk'])
 const SITE_URLS = {
   moodle: 'https://moodle.hku.hk/',
   portal: 'https://studentportal.hku.hk/',
+  sis: 'https://sis-main.hku.hk/psp/sisprod/EMPLOYEE/PSFT_CS/c/SA_LEARNER_SERVICES.SSR_SSENRL_SCHD_W.GBL?pslnkid=Z_HC_SSR_SSENRL_SCHD_W_LNK',
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -85,7 +86,7 @@ function pageHost(url) {
 function siteForHost(host) {
   if (host === 'moodle.hku.hk') return 'moodle'
   if (host === 'studentportal.hku.hk') return 'portal'
-  if (host === 'hkuportal.hku.hk') return 'sis'
+  if (host === 'hkuportal.hku.hk' || host === 'sis-main.hku.hk' || host === 'sweb.hku.hk' || host === 'intraweb.hku.hk') return 'sis'
   return ''
 }
 
@@ -257,7 +258,7 @@ function extractorSource() {
   // with a return value. This keeps both connectors on the same parser.
   const marker = /\n\s*publish\(\)\s*\n\}\)\(\)\s*;?\s*$/
   if (!marker.test(source)) throw new Error('extension/content.js 的 adapter 入口结构已改变，CDP 连接器需要更新')
-  return source.replace(marker, "\n  return site === 'moodle' ? extractMoodle() : { schedule: extractSis() }\n})()")
+  return source.replace(marker, "\n  return site === 'moodle' ? extractMoodle() : { schedule: extractSis(), scheduleWeek: (() => { const raw = String(document.body?.textContent || document.documentElement?.textContent || ''); const match = raw.match(/Week\\s+of\\s+(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})\\s*[-–]\\s*(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/i); if (!match) return undefined; const iso = (d, m, y) => y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0'); return { start: iso(Number(match[1]), Number(match[2]), Number(match[3])), end: iso(Number(match[4]), Number(match[5]), Number(match[6])) } })() }\n})()")
 }
 
 const EXTRACTOR_SOURCE = extractorSource()
@@ -340,9 +341,11 @@ async function syncTarget(bridgeUrl, target, { extract = true } = {}) {
     return { site, connected: false, error: `解析页面失败：${error.message}` }
   }
   const payload = { connected: true, detail: detailFor(site, metadata, true) }
+  if (site === 'sis' && Array.isArray(data?.schedule) && data.schedule.length > 0) payload.replaceFields = ['schedule']
   for (const field of ['schedule', 'courses', 'assignments', 'announcements', 'resources', 'grades']) {
     if (Array.isArray(data?.[field])) payload[field] = data[field]
   }
+  if (data?.scheduleWeek && typeof data.scheduleWeek.start === 'string' && typeof data.scheduleWeek.end === 'string') payload.scheduleWeek = data.scheduleWeek
   const count = ['schedule', 'courses', 'assignments', 'announcements', 'resources', 'grades'].reduce((sum, field) => sum + (payload[field]?.length || 0), 0)
   if (count === 0) payload.detail += '；当前页面没有可识别的数据'
   const result = await postIngest(bridgeUrl, site, payload)
@@ -399,7 +402,7 @@ function runSelfTest() {
   // malformed adapter edit without requiring a browser or an HKU account.
   // eslint-disable-next-line no-new-func
   new Function(EXTRACTOR_SOURCE)
-  const expected = { 'moodle.hku.hk': 'moodle', 'studentportal.hku.hk': 'portal', 'hkuportal.hku.hk': 'sis' }
+  const expected = { 'moodle.hku.hk': 'moodle', 'studentportal.hku.hk': 'portal', 'hkuportal.hku.hk': 'sis', 'sis-main.hku.hk': 'sis', 'sweb.hku.hk': 'sis', 'intraweb.hku.hk': 'sis' }
   for (const [host, site] of Object.entries(expected)) {
     if (siteForHost(pageHost(`https://${host}/`)) !== site) throw new Error(`host mapping failed for ${host}`)
   }

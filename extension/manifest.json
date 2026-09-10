@@ -8,7 +8,8 @@
       "matches": [
         "https://moodle.hku.hk/*",
         "https://studentportal.hku.hk/*",
-        "https://hkuportal.hku.hk/*"
+        "https://hkuportal.hku.hk/*",
+        "https://sis-main.hku.hk/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
@@ -18,6 +19,7 @@
     "https://moodle.hku.hk/*",
     "https://studentportal.hku.hk/*",
     "https://hkuportal.hku.hk/*",
+    "https://sis-main.hku.hk/*",
     "http://127.0.0.1:17321/*"
   ],
   "permissions": []
