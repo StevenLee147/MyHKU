@@ -2,13 +2,35 @@ node_modules/
 User_Files/
 dist/
 *.tsbuildinfo
+
+# Local accounts, browser sessions, and diagnostics must never be published.
 .myhku/
-.env.local
+myhku-account*
+myhku-cache*
+myhku-first-login-window-shown
+*.log
+*.har
+
+# Keep only the documented environment template in this public repository.
+.env
+.env.*
+!.env.example
+
+# Android build output, generated web assets, and private signing material.
 android/.gradle/
 android/local.properties
+android/build/
 android/app/build/
+android/app/src/main/assets/dashboard-app/
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.key
 gradle-*.zip
 .gradle-tools/
+
+# Local release artifacts.
 release/
 release-test/
 dist-electron/

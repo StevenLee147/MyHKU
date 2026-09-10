@@ -8,8 +8,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && node scripts/sync-android-assets.mjs",
-    "build:web": "tsc -b && vite build",
+    "check:privacy": "node scripts/check-privacy.mjs",
+    "test:privacy": "node --test scripts/check-privacy.test.mjs",
+    "build": "npm run check:privacy && tsc -b && vite build && node scripts/sync-android-assets.mjs && node scripts/check-privacy.mjs --include-build --include-android-build",
+    "build:web": "npm run check:privacy && tsc -b && vite build && node scripts/check-privacy.mjs --include-build",
     "package:web": "npm run build:web && node scripts/package-web.mjs",
     "preview": "vite preview",
     "bridge": "node bridge/server.mjs",
@@ -49,7 +51,17 @@
       "desktop/**/*",
       "bridge/**/*",
       "extension/**/*",
-      "package.json"
+      "package.json",
+      "!**/.env",
+      "!**/.env.*",
+      "!**/.myhku/**",
+      "!**/User_Files/**",
+      "!**/myhku-account*",
+      "!**/myhku-cache*",
+      "!**/myhku-first-login-window-shown",
+      "!**/*.log",
+      "!**/*.har",
+      "!**/*.{jks,keystore,p12,pfx,key}"
     ],
     "directories": {
       "output": "dist-electron"
