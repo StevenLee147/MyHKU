@@ -18,12 +18,19 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      - run: npm run desktop:package
+      - run: npm run desktop:package -- --publish never
         env: { MYHKU_RELEASE_DIR: release/desktop }
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
-          path: release/desktop
+          path: |
+            release/desktop/*.exe
+            release/desktop/*.dmg
+            release/desktop/*.zip
+            release/desktop/*.blockmap
+            release/desktop/latest*.yml
+            release/desktop/alpha*.yml
+          if-no-files-found: error
 
   android:
     runs-on: ubuntu-latest
@@ -51,7 +58,12 @@ jobs:
           MYHKU_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.MYHKU_ANDROID_KEYSTORE_PASSWORD }}
           MYHKU_ANDROID_KEY_PASSWORD: ${{ secrets.MYHKU_ANDROID_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
-        with: { name: android, path: android/app/build/outputs }
+        with:
+          name: android
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -63,6 +75,7 @@ jobs:
       - run: cd release && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             release/**
             release/SHA256SUMS.txt
