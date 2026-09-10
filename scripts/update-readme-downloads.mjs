@@ -1,6 +1,17 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
+export function updateReleaseBody(release, defaultBranch) {
+  if (!defaultBranch) throw new Error('Default branch is required to update release documentation links')
+  const repoUrl = release.html_url.split('/releases/')[0]
+  const currentReadme = `${repoUrl}/blob/${defaultBranch}/README.md`
+  // Tags are immutable snapshots: their README still contains the previous release.
+  // Match only this release's README URL, leaving other release notes untouched.
+  const oldReadmes = [release.tag_name, encodeURIComponent(release.tag_name)]
+    .map(tag => `${repoUrl}/blob/${tag}/README.md`)
+  return oldReadmes.reduce((body, url) => body.replaceAll(url, currentReadme), release.body || '')
+}
+
 export function updateReadme(readme, release) {
   const assets = release.assets || []
   const required = (pattern) => {
@@ -65,6 +76,20 @@ async function main() {
   const updated = updateReadme(readme, release)
   if (updated !== readme) writeFileSync('README.md', updated)
   console.log(`README downloads: ${release.tag_name}; ${updated === readme ? 'unchanged' : 'updated'}`)
+
+  if (process.argv.includes('--sync-release-notes')) {
+    if (!process.env.GITHUB_TOKEN) throw new Error('GITHUB_TOKEN is required to update release notes')
+    for (const published of releases.filter(r => !r.draft && r.published_at && /^v\d/.test(r.tag_name))) {
+      const body = updateReleaseBody(published, process.env.DEFAULT_BRANCH)
+      if (body === (published.body || '')) continue
+      const response = await fetch(`${process.env.GITHUB_API_URL || 'https://api.github.com'}/repos/${repository}/releases/${published.id}`, {
+        method: 'PATCH', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      })
+      if (!response.ok) throw new Error(`Update release notes ${published.tag_name}: ${response.status}`)
+      console.log(`Release documentation link repaired: ${published.tag_name}`)
+    }
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

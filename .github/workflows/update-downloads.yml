@@ -1,9 +1,7 @@
 name: Update README downloads
 
 on:
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -15,19 +13,20 @@ concurrency:
 
 jobs:
   update:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.repository.default_branch }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Verify README updater
         run: node --test scripts/update-readme-downloads.test.mjs
-      - name: Update download links from published release assets
-        run: node scripts/update-readme-downloads.mjs
+      - name: Update downloads and repair release documentation links
+        run: node scripts/update-readme-downloads.mjs --sync-release-notes
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Commit README changes
@@ -40,5 +39,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md
           git commit -m "docs: update latest release downloads"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          git pull --rebase origin "$DEFAULT_BRANCH"
+          git push origin "HEAD:$DEFAULT_BRANCH"

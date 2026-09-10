@@ -95,6 +95,8 @@ npm run desktop:package
 
 项目将 Android、Windows 和 macOS 统一为 tag 发布。Web 前端会在构建桌面和 Android 时作为共享资源打包进去，不单独作为发布端。版本号只维护在 `package.json`，发布时创建 `v<version>` tag，GitHub Actions 会并行构建三端产物，最后生成 `SHA256SUMS.txt` 到 GitHub Release。
 
+Release 上传成功后，同一工作流的 `update-downloads` 任务会更新默认分支 README 下载表（包含预发布版，按发布时间选取最新版本），并修正已发布版本中指向 tag 快照的 README 安装指南链接。文档更新失败会使 Release 工作流失败；可重跑失败任务，或手动运行 `Update README downloads` 补更新，无需重新构建安装包。Release 中的文档入口始终指向默认分支；tag 内的 README 是历史快照，不会随发布后的文档更新而改变。
+
 本地构建 Android：
 
 ```powershell

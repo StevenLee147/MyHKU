@@ -116,7 +116,7 @@ jobs:
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            安装前请阅读 [README 各设备安装指南](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md#各设备安装指南)。
+            最新安装包见 [README 下载与设备对应](https://github.com/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/README.md#下载与设备对应)；安装前请阅读 [各设备安装指南](https://github.com/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/README.md#各设备安装指南)。
 
             - Windows x64：推荐 `MyHKU.Setup.<版本>.exe`；另有免安装 EXE。
             - Mac Apple Silicon：下载 arm64 DMG 或 ZIP，移入 Applications。未公证版本首次打开的系统提示处理方法见安装指南。
@@ -124,3 +124,9 @@ jobs:
             - `SHA256SUMS.txt` 可用于核对下载完整性。
           files: |
             release/**
+
+  update-downloads:
+    needs: publish
+    uses: ./.github/workflows/update-downloads.yml
+    permissions:
+      contents: write
