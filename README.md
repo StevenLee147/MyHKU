@@ -6,6 +6,44 @@
 
 旧预发布版本及其安装包已撤下，当前没有可下载的发布版本。请按下方说明从源码构建；新的安装包发布后会更新此处。
 
+## 各设备安装指南
+
+以下步骤适用于上方下载表提供的安装包。目前提供 Windows x64、Mac Apple Silicon（M 系列芯片 / arm64）和 Android 8.0 及以上版本；未提供 Intel Mac、Windows ARM64 原生版或 iPhone / iPad 安装包。下载前请确认设备类型。
+
+当前无 Apple 开发者证书的 Mac 构建仅做 ad-hoc 签名，未经过 Apple 公证；Windows EXE 也没有发布者签名。它们仍可能被系统拦截，下面的操作不会将其变成经开发者认证的应用。仅对本仓库 [GitHub Releases](https://github.com/StevenLee147/MyHKU/releases) 下载、且与该版本 `SHA256SUMS.txt` 匹配的文件执行放行操作。
+
+### Windows 电脑
+
+1. 普通安装选名称含 `Setup` 的 EXE，双击并按向导安装；便携版选不含 `Setup` 的 EXE，保存到固定文件夹后直接运行。
+2. 若出现「Windows 已保护你的电脑」，核对下载来源和校验值后选择「更多信息 → 仍要运行」。若没有此选项或电脑由学校/单位管理，请联系管理员处理，不要关闭系统防护。
+3. 从开始菜单或便携版 EXE 启动 MyHKU，完成下方首次登录步骤。更新安装版前先退出旧版本，再运行新安装包。
+
+### Mac（Apple Silicon）
+
+1. 在「苹果菜单 → 关于本机」确认芯片为 Apple M 系列。下载 `arm64.dmg`，打开后将 **MyHKU 拖入 Applications（应用程序）**，等待复制完成，再在 Finder 中推出安装磁盘。ZIP 备用包解压后同样将 `MyHKU.app` 移入「应用程序」。
+2. 从「应用程序」打开 MyHKU。若提示无法验证开发者或 Apple 无法检查恶意软件，关闭提示，前往「系统设置 → 隐私与安全性」，找到 MyHKU 的拦截记录，点击「仍要打开（Open Anyway）」并确认。
+3. 若仍显示「MyHKU 已损坏，无法打开」且上一步不可用，先核对官方来源和 `SHA256SUMS.txt`。确认应用已复制到 `/Applications/MyHKU.app` 后，打开「终端」执行以下命令，再从「应用程序」启动：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/MyHKU.app
+```
+
+此命令只移除这份 MyHKU 应用的下载隔离标记，不能修复实际损坏的文件，也不代表 Apple 已验证应用。校验值不一致时应删除下载文件并重新下载；不要对整个「下载」或「应用程序」目录运行此命令，也不要全局关闭 Gatekeeper。命令如报权限错误，请确认复制位置和文件所有者，不要直接添加 `sudo`。
+
+### Android 手机 / 平板
+
+1. 优先下载 `app-release.apk`；若本次发布只有测试安装包，选 **`app-debug.apk`**。后者已有调试签名，可以安装，但不是正式发布签名。
+2. 在手机中打开 APK，按系统提示为当前浏览器或文件管理器开启「允许来自此来源的应用 / 安装未知应用」，完成安装后可关闭该来源权限。
+3. 更新前先退出应用并尝试安装新 APK。测试包的调试密钥可能随构建变化，改用正式签名也会导致签名不匹配；出现「应用未安装 / 与现有软件包冲突」时无法直接覆盖。**卸载会清除应用的本地账户、设置和缓存**，请先记录必要设置、保存需要的资料；目前没有保证保留或恢复全部本地数据的迁移流程，确认可接受后再卸载重装。
+
+`app-release-unsigned.apk` 没有签名，不能直接在手机安装；`.aab` 供开发者签名后用于商店分发或生成 APK，也不能直接点击安装。普通用户请选择上面的可安装 APK。
+
+### 校验下载与首次登录
+
+从同一 Release 下载 `SHA256SUMS.txt`，找到对应文件名的条目，对比 SHA-256 值。Windows PowerShell 使用 `Get-FileHash -Algorithm SHA256 "下载文件的完整路径"`；Mac 终端使用 `shasum -a 256 "下载文件的完整路径"`。Android APK 也可先在电脑校验后传到手机。
+
+首次启动会显示本地账户向导；保存账户后，在打开的 **HKU 官方 Portal / Moodle 登录窗口**中完成 SSO 和首次 MFA / 2FA。应用不会替你绕过验证；会话过期时需再次在官方窗口登录。完成后返回仪表盘并同步课程数据。
+
 ## 运行
 
 ```bash
@@ -51,7 +89,9 @@ npm run android:release     # release APK/AAB（配置签名后）
 
 桌面产物可用 `MYHKU_RELEASE_DIR=release/desktop npm run desktop:package` 指定目录。完整本地产物可执行 `npm run release:stage`，它会收集桌面和 Android 输出并生成 SHA-256 校验文件。
 
-GitHub Actions 的 Android release 签名使用以下 secrets：`MYHKU_ANDROID_KEYSTORE_BASE64`、`MYHKU_ANDROID_KEY_ALIAS`、`MYHKU_ANDROID_KEYSTORE_PASSWORD`、`MYHKU_ANDROID_KEY_PASSWORD`。仓库不保存 keystore；没有签名环境时仍可构建 unsigned release 供内测，正式分发前必须配置 secrets。Windows 和 macOS 桌面安装包在对应 runner 上构建，macOS 公证或代码签名可在仓库 secrets 配置后再接入 electron-builder 的签名变量。
+GitHub Actions 的 Android release 签名使用以下 secrets：`MYHKU_ANDROID_KEYSTORE_BASE64`、`MYHKU_ANDROID_KEY_ALIAS`、`MYHKU_ANDROID_KEYSTORE_PASSWORD`、`MYHKU_ANDROID_KEY_PASSWORD`。仓库不保存 keystore；没有发布签名环境时提供可安装的 `app-debug.apk` 供测试，同时保留不能直接安装的 unsigned release APK / AAB 供开发者使用。正式分发和稳定覆盖更新需要配置持久的发布签名。
+
+macOS 默认 `MYHKU_MAC_NOTARIZE=0`：应用采用 ad-hoc 签名，不进行 Apple 公证，安装时仍可能需要按上方指南放行。未来设置 `MYHKU_MAC_NOTARIZE=1` 并提供 Developer ID 及 Apple 凭据后，构建会强制签名、公证、装订票据并检查 Gatekeeper；缺少凭据或检查失败会停止发布。CI 在配置 `MYHKU_MAC_CERTIFICATE_BASE64` 后启用此严格模式，其余所需 secrets 和本地命令见 [macOS 发布配置](docs/macos-release.md)。已有下载文件不会因修改配置自动改变，必须重新构建发布。
 
 产物默认写入系统临时目录 `MyHKU-release/`（可用 `MYHKU_RELEASE_DIR` 指定输出目录）。安装包首次启动会先显示账户向导；账户保存后在官方 HKU 登录窗口完成 SSO/MFA。应用只在受限的官方窗口中自动填充常规登录字段，不绕过 2FA。
 

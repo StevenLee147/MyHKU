@@ -1,7 +1,7 @@
 {
   "name": "myhku-dashboard",
   "private": true,
-  "version": "0.1.0-alpha",
+  "version": "0.1.1-alpha",
   "description": "HKU Portal, SIS and Moodle learning dashboard",
   "author": "MyHKU",
   "main": "desktop/main.mjs",
@@ -21,6 +21,9 @@
     "desktop:dev": "npm run build && electron desktop/main.mjs",
     "desktop": "electron desktop/main.mjs",
     "desktop:package": "npm run build && node scripts/package-desktop.mjs",
+    "check:macos-signing": "node scripts/macos-release.mjs --check",
+    "verify:macos-release": "node scripts/verify-macos-release.mjs",
+    "test:macos-release": "node --test scripts/macos-release.test.mjs scripts/verify-macos-release.test.mjs",
     "android:debug": "npm run build && android\\gradlew.bat --project-dir android :app:assembleDebug",
     "android:release": "npm run build && android\\gradlew.bat --project-dir android :app:bundleRelease",
     "release:stage": "node scripts/stage-release.mjs"
@@ -42,6 +45,9 @@
   "build": {
     "appId": "hk.my.myhku",
     "productName": "MyHKU",
+    "beforePack": "./scripts/macos-release.mjs",
+    "afterSign": "./scripts/macos-release.mjs",
+    "artifactBuildCompleted": "./scripts/macos-release.mjs",
     "asar": true,
     "asarUnpack": [
       "bridge/**/*"
@@ -72,11 +78,28 @@
         "portable"
       ]
     },
+    "nsis": {
+      "artifactName": "${productName}.Setup.${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}.${version}.${ext}"
+    },
     "mac": {
+      "type": "distribution",
+      "identity": "-",
+      "forceCodeSigning": false,
+      "hardenedRuntime": false,
+      "entitlements": "desktop/entitlements.mac.plist",
+      "entitlementsInherit": "desktop/entitlements.mac.plist",
+      "notarize": false,
       "target": [
         "dmg",
         "zip"
       ]
+    },
+    "dmg": {
+      "sign": false,
+      "writeUpdateInfo": false
     }
   }
 }
