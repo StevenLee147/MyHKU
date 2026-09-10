@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.myhku/
+.env.local
+android/.gradle/
+android/local.properties
+android/app/build/
+gradle-*.zip
+.gradle-tools/
+release/
+release-test/
+dist-electron/

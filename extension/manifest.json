@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "MyHKU page connector",
+  "version": "0.1.0",
+  "description": "将已登录的 HKU Portal、SIS 和 Moodle 页面中的只读课程数据同步到本机 MyHKU。",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://moodle.hku.hk/*",
+        "https://studentportal.hku.hk/*",
+        "https://hkuportal.hku.hk/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": [
+    "https://moodle.hku.hk/*",
+    "https://studentportal.hku.hk/*",
+    "https://hkuportal.hku.hk/*",
+    "http://127.0.0.1:17321/*"
+  ],
+  "permissions": []
+}

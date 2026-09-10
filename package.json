@@ -1,0 +1,50 @@
+{
+  "name": "myhku-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HKU Portal, SIS and Moodle learning dashboard",
+  "author": "MyHKU",
+  "main": "desktop/main.mjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build && node scripts/sync-android-assets.mjs",
+    "build:web": "tsc -b && vite build",
+    "package:web": "npm run build:web && node scripts/package-web.mjs",
+    "preview": "vite preview",
+    "bridge": "node bridge/server.mjs",
+    "bridge:cdp": "node bridge/cdp.mjs",
+    "bridge:cdp:once": "node bridge/cdp.mjs --once",
+    "bridge:cdp:test": "node bridge/cdp.mjs --self-test",
+    "desktop:dev": "npm run build && electron desktop/main.mjs",
+    "desktop": "electron desktop/main.mjs",
+    "desktop:package": "npm run build && node scripts/package-desktop.mjs"
+    ,"android:debug": "npm run build && android\\gradlew.bat --project-dir android :app:assembleDebug",
+    "android:release": "npm run build && android\\gradlew.bat --project-dir android :app:bundleRelease",
+    "release:stage": "node scripts/stage-release.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "lucide-react": "^0.468.0",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "hk.my.myhku",
+    "productName": "MyHKU",
+    "asar": true,
+    "asarUnpack": ["bridge/**/*"],
+    "files": ["dist/**/*", "desktop/**/*", "bridge/**/*", "extension/**/*", "package.json"],
+    "directories": { "output": "dist-electron" },
+    "win": { "target": ["nsis", "portable"] },
+    "mac": { "target": ["dmg", "zip"] }
+  }
+}

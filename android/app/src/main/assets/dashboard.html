@@ -1,0 +1,37 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MyHKU 概览</title>
+<style>
+  :root { color-scheme: light; font-family: system-ui, sans-serif; background:#f5f7fa; color:#102a43; }
+  body { margin:0; padding:20px; } h1 { margin:0 0 4px; font-size:24px; }
+  .muted { color:#627d98; font-size:13px; } .grid { display:grid; gap:12px; margin-top:18px; }
+  section { background:white; border:1px solid #d9e2ec; border-radius:8px; padding:14px; }
+  h2 { font-size:16px; margin:0 0 8px; } ul { margin:0; padding-left:20px; } li { margin:5px 0; }
+  .empty { color:#829ab1; } table { width:100%; border-collapse:collapse; font-size:12px; }
+  td { border-top:1px solid #e6edf3; padding:6px 4px; vertical-align:top; }
+</style>
+<main>
+  <h1>MyHKU</h1><div id="meta" class="muted">等待官方页面数据</div>
+  <div class="grid">
+    <section><h2>页面标题</h2><ul id="headings"><li class="empty">尚无数据</li></ul></section>
+    <section><h2>课程与活动候选</h2><ul id="courses"><li class="empty">尚无数据</li></ul></section>
+    <section><h2>读取到的表格</h2><div id="tables" class="empty">尚无数据</div></section>
+    <section><h2>规范化学习数据</h2><div id="normalized" class="empty">尚无数据</div></section>
+  </div>
+</main>
+<script>
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function renderSnapshot() {
+    let data;
+    try { data = JSON.parse(window.MyHKUDashboard.getLatestSnapshot()); } catch { data = {}; }
+    document.getElementById('meta').textContent = data.source || data.site ? `${data.source || data.site} · ${data.fetchedAt || data.capturedAt || ''}` : '等待官方页面数据';
+    const headings = (data.headings || []).map(esc);
+    document.getElementById('headings').innerHTML = headings.length ? headings.map(x => `<li>${x}</li>`).join('') : '<li class="empty">没有读取到可见标题</li>';
+    const courses = (data.courseCandidates || []).map(x => `<li>${esc(x.title)}${x.url ? ` <span class="muted">${esc(x.url)}</span>` : ''}</li>`);
+    document.getElementById('courses').innerHTML = courses.length ? courses.join('') : '<li class="empty">没有发现课程或活动候选</li>';
+    const tables = data.tables || [];
+    document.getElementById('tables').innerHTML = tables.length ? tables.map(t => `<h3>${esc(t.caption || '表格')}</h3><table>${(t.rows || []).map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>`).join('') : '没有读取到可见表格';
+    const normalized = [['课程', data.courses], ['课表', data.schedule], ['待办', data.assignments], ['资料', data.resources], ['公告', data.announcements], ['成绩', data.grades]];
+    document.getElementById('normalized').innerHTML = normalized.map(([label, values]) => `<div><b>${label}（${(values || []).length}）</b>${(values || []).slice(0, 20).map(x => `<div>${esc(x.title || x.name || x.course || '')}${x.start ? ` · ${esc(x.start)}–${esc(x.end || '')}` : ''}${x.value ? ` · ${esc(x.value)}` : ''}</div>`).join('') || '<span class="muted">暂无</span>'}</div>`).join('');
+  }
+</script>

@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.MyHKU" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#315E9B</item>
+        <item name="android:navigationBarColor">#F5F7FA</item>
+        <item name="android:statusBarColor">#102A43</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
