@@ -2,6 +2,25 @@
 
 基于 Vite、React 和 TypeScript 的桌面/手机响应式仪表盘。已接入 HKU 官方登录入口：Portal/SIS 使用 `https://studentportal.hku.hk/`，Moodle 使用 CAS 登录地址。首次使用创建本地账户并完成一次官方 2FA；之后桌面端自动复用会话并尝试后台登录。
 
+## 下载与设备对应
+
+当前最新可下载版本：**[v0.1.0-alpha（预发布版）](https://github.com/StevenLee147/MyHKU/releases/tag/v0.1.0-alpha)**。按设备选择下表中的安装包，无需下载源码。
+
+| 设备 | 对应安装包 | 最新版本下载 | 安装提示 |
+| --- | --- | --- | --- |
+| Windows 64 位电脑（Intel / AMD x64） | `MyHKU.Setup.<版本>.exe` | [下载安装版 EXE](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.0-alpha/MyHKU.Setup.0.1.0-alpha.exe) | 推荐；运行安装向导。 |
+| Windows 64 位电脑（免安装） | `MyHKU.<版本>.exe` | [下载便携版 EXE](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.0-alpha/MyHKU.0.1.0-alpha.exe) | 下载后直接运行。 |
+| Mac Apple Silicon（M 系列芯片 / arm64） | `MyHKU-<版本>-arm64.dmg` | [下载 DMG](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.0-alpha/MyHKU-0.1.0-alpha-arm64.dmg) | 推荐；打开磁盘映像，将应用拖入 Applications。 |
+| Mac Apple Silicon（ZIP 备用包） | `MyHKU-<版本>-arm64-mac.zip` | [下载 ZIP](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.0-alpha/MyHKU-0.1.0-alpha-arm64-mac.zip) | 解压后将应用移入 Applications。 |
+| Android 8.0 及以上手机 / 平板 | `app-release-unsigned.apk` | [下载 APK（未签名）](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.0-alpha/app-release-unsigned.apk) | 当前包未签名，不能直接安装；需签名后安装。 |
+| Android 应用商店分发 / 开发者 | `app-release.aab` | [下载 AAB](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.0-alpha/app-release.aab) | 用于商店分发或生成 APK，不能直接点击安装。 |
+
+当前未提供 Intel Mac（x64）、Windows ARM64 原生包或 iPhone / iPad 安装包。Mac 可在「关于本机」查看芯片类型；Windows 可在「设置 → 系统 → 系统信息」查看系统类型。
+
+上表直链对应当前最新版本 `v0.1.0-alpha`，后续发布时需同步更新。查看[全部版本（含预发布版）](https://github.com/StevenLee147/MyHKU/releases)；GitHub 的 [Latest 正式版入口](https://github.com/StevenLee147/MyHKU/releases/latest)不包含 alpha 等预发布版，目前尚无正式版。
+
+可下载 [SHA256SUMS.txt](https://github.com/StevenLee147/MyHKU/releases/download/v0.1.0-alpha/SHA256SUMS.txt) 校验文件完整性；`.blockmap`、`latest.yml` 和 `latest-mac.yml` 是更新元数据，无需手动安装。
+
 ## 运行
 
 ```bash
