@@ -54,7 +54,10 @@ async function main() {
   }
   const release = releases.filter(r => !r.draft && r.published_at && /^v\d/.test(r.tag_name))
     .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))[0]
-  if (!release) throw new Error('No published release found')
+  if (!release) {
+    console.log('No published release found; README unchanged.')
+    return
+  }
   const readme = readFileSync('README.md', 'utf8')
   const updated = updateReadme(readme, release)
   if (updated !== readme) writeFileSync('README.md', updated)
