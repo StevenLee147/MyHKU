@@ -23,8 +23,7 @@ export function updateReadme(readme, release) {
     `| ${device} | \`${asset.name}\` | [${label}](${asset.browser_download_url}) | ${hint} |`
   const apk = assets.find(({ name }) => name === 'app-release.apk')
     || assets.find(({ name }) => name === 'app-debug.apk')
-    || required(/^app-release-unsigned\.apk$/)
-  const unsigned = apk.name.includes('-unsigned')
+  if (!apk) throw new Error(`Release ${release.tag_name} is missing an installable signed APK`)
   const debug = apk.name === 'app-debug.apk'
   const repoUrl = release.html_url.split('/releases/')[0]
   const block = [
@@ -38,7 +37,7 @@ export function updateReadme(readme, release) {
     row('Windows 64 位电脑（免安装）', required(/^MyHKU[ .](?!Setup[ .]).*\.exe$/), '下载便携版 EXE', '下载后直接运行。'),
     row('Mac Apple Silicon（M 系列芯片 / arm64）', required(/^MyHKU-.*-arm64\.dmg$/), '下载 DMG', '拖入 Applications；如遇系统拦截，见[各设备安装指南](#各设备安装指南)。'),
     row('Mac Apple Silicon（ZIP 备用包）', required(/^MyHKU-.*-arm64-mac\.zip$/), '下载 ZIP', '解压后移入 Applications；系统拦截处理见[安装指南](#各设备安装指南)。'),
-    row('Android 8.0 及以上手机 / 平板', apk, unsigned ? '下载 APK（未签名）' : debug ? '下载测试 APK（可安装）' : '下载 APK', unsigned ? '当前包未签名，不能直接安装；需由开发者签名。' : debug ? '使用调试签名，可直接安装；更新限制见[安装指南](#各设备安装指南)。' : '下载后打开 APK，按系统提示允许安装此来源的应用。'),
+    row('Android 8.0 及以上手机 / 平板', apk, debug ? '下载测试 APK（可安装）' : '下载 APK（已签名）', debug ? '使用调试签名，可直接安装；更新限制见[安装指南](#各设备安装指南)。' : '下载后打开 APK，按系统提示允许安装此来源的应用。'),
     row('Android 应用商店分发 / 开发者', required(/^app-release\.aab$/), '下载 AAB', '用于商店分发或生成 APK，不能直接点击安装。'),
     '',
     '当前未提供 Intel Mac（x64）、Windows ARM64 原生包或 iPhone / iPad 安装包。Mac 可在「关于本机」查看芯片类型；Windows 可在「设置 → 系统 → 系统信息」查看系统类型。',

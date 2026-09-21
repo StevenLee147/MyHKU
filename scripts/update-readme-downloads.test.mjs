@@ -9,7 +9,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { updateReadme, updateReleaseBody } from './update-readme-downloads.mjs'
 
-function release(signed = false) {
+function release(signed = true) {
   return {
     tag_name: 'v0.2.0', prerelease: false,
     html_url: 'https://github.com/example/app/releases/tag/v0.2.0',
@@ -26,7 +26,7 @@ test('updates only downloads, preserves CRLF and is idempotent', () => {
   assert.ok(updated.startsWith('# App\r\n\r\n'))
   assert.ok(updated.endsWith('## 运行\r\nkeep this\r\n'))
   assert.match(updated, /v0\.2\.0（正式版）/)
-  assert.match(updated, /不能直接安装/)
+  assert.match(updated, /下载 APK（已签名）/)
   assert.equal(updateReadme(updated, release()), updated)
   assert.equal(updated.replaceAll('\r\n', '').includes('\n'), false)
 })
@@ -75,6 +75,7 @@ test('release updates preserve the permanent installation guide and its commands
 
 test('missing release assets or section fail instead of publishing broken links', () => {
   assert.throws(() => updateReadme('## 下载与设备对应\n', { ...release(), assets: [] }), /missing/)
+  assert.throws(() => updateReadme('## 下载与设备对应\n', release(false)), /installable signed APK/)
   assert.throws(() => updateReadme('# unrelated\n', release()), /section not found/)
 })
 

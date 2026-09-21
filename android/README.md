@@ -9,3 +9,13 @@ The app refreshes the current page when it returns to the foreground and exposes
 First run `npm ci` and `npm run build` from the repository root to generate the shared dashboard assets. These generated files are ignored by Git and must be rebuilt after a fresh checkout or frontend change. Then open this `android/` directory in Android Studio with JDK 17 and Android SDK 35. The repository includes a Gradle 8.10.2 wrapper; `./gradlew :app:assembleDebug` (or `gradlew.bat :app:assembleDebug` on Windows) builds the debug APK.
 
 The Android SDK is intentionally not committed. The verified local build used SDK platform 35, JDK 17, and Gradle 8.10.2. If Maven Central is unavailable in your network, the project also lists the Aliyun public mirror in `settings.gradle.kts`.
+
+## Signed releases
+
+From v0.1.4-alpha, releases use one persistent signing key. The public certificate SHA-256 is pinned in `release-certificate.sha256`; the private keystore and passwords are stored in GitHub Actions secrets, never in this repository. Preserve the signing key for future updates. Debug builds use `hk.my.myhku.debug` so new development installs do not conflict with the release package `hk.my.myhku`.
+
+Set `MYHKU_ANDROID_KEYSTORE_PATH`, `MYHKU_ANDROID_KEY_ALIAS`, `MYHKU_ANDROID_KEYSTORE_PASSWORD`, and `MYHKU_ANDROID_KEY_PASSWORD` before running `./gradlew :app:assembleRelease :app:bundleRelease`. Missing signing configuration fails the build instead of producing an unsigned release APK. CI restores the same keystore from `MYHKU_ANDROID_KEYSTORE_BASE64` and publishes only the verified `app-release.apk`, signed AAB, and public certificate digest.
+
+CI verifies APK signatures, the pinned certificate, package ID, version, minimum SDK, non-debuggable status, ZIP alignment, and the AAB signing identity. It then installs and starts the actual APK on API 26 and API 35 emulators and verifies replacement of an older APK signed with the same key. A failed check prevents publication. The older APK is only a test fixture and is never uploaded to the release.
+
+Old v0.1.1/v0.1.2 debug builds used ephemeral runner keys and cannot be upgraded with the new signing identity. Users who installed them need to preserve any required local data before uninstalling that old test build once. Subsequent releases retain the new certificate and increase `versionCode`. The public download guide explains this migration.

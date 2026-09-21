@@ -3,6 +3,13 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseKeystore = System.getenv("MYHKU_ANDROID_KEYSTORE_PATH")
+val releaseAlias = System.getenv("MYHKU_ANDROID_KEY_ALIAS")
+val releaseStorePassword = System.getenv("MYHKU_ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyPassword = System.getenv("MYHKU_ANDROID_KEY_PASSWORD")
+val releaseSigningReady = !releaseKeystore.isNullOrBlank() && file(releaseKeystore.orEmpty()).isFile &&
+    !releaseAlias.isNullOrBlank() && !releaseStorePassword.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
+
 android {
     namespace = "hk.my.myhku"
     compileSdk = 35
@@ -11,18 +18,17 @@ android {
         applicationId = "hk.my.myhku"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.1.3-alpha"
+        versionCode = providers.gradleProperty("myhkuVersionCode").orNull?.toInt() ?: 4
+        versionName = providers.gradleProperty("myhkuVersionName").orNull ?: "0.1.4-alpha"
     }
 
     signingConfigs {
         create("release") {
-            val keystorePath = System.getenv("MYHKU_ANDROID_KEYSTORE_PATH")
-            if (!keystorePath.isNullOrBlank() && file(keystorePath).exists()) {
-                storeFile = file(keystorePath)
-                storePassword = System.getenv("MYHKU_ANDROID_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("MYHKU_ANDROID_KEY_ALIAS")
-                keyPassword = System.getenv("MYHKU_ANDROID_KEY_PASSWORD")
+            if (releaseSigningReady) {
+                storeFile = file(releaseKeystore!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }
@@ -37,6 +43,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             isMinifyEnabled = false
             val releaseSigning = signingConfigs.getByName("release")
@@ -44,6 +54,16 @@ android {
         }
     }
 }
+
+// Missing credentials must fail a release, never emit an un-installable APK.
+val verifyReleaseSigning by tasks.registering {
+    doLast {
+        check(releaseSigningReady) {
+            "Android release signing is required. Configure MYHKU_ANDROID_KEYSTORE_PATH, MYHKU_ANDROID_KEY_ALIAS, MYHKU_ANDROID_KEYSTORE_PASSWORD and MYHKU_ANDROID_KEY_PASSWORD."
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(verifyReleaseSigning) }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")

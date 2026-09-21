@@ -4,6 +4,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional v<package version> tag to publish after all builds and installation checks pass'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -64,44 +69,86 @@ jobs:
 
   android:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       MYHKU_ANDROID_KEYSTORE_BASE64: ${{ secrets.MYHKU_ANDROID_KEYSTORE_BASE64 }}
+      MYHKU_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/myhku-release.jks
+      MYHKU_ANDROID_KEY_ALIAS: ${{ secrets.MYHKU_ANDROID_KEY_ALIAS }}
+      MYHKU_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.MYHKU_ANDROID_KEYSTORE_PASSWORD }}
+      MYHKU_ANDROID_KEY_PASSWORD: ${{ secrets.MYHKU_ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - run: npm ci
       - run: npm run build
-      - name: Prepare Android signing key
-        if: ${{ env.MYHKU_ANDROID_KEYSTORE_BASE64 != '' }}
-        run: echo "$MYHKU_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/myhku-release.jks"
+      - name: Validate explicitly requested release version
+        if: inputs.release_tag != ''
         env:
-          MYHKU_ANDROID_KEYSTORE_BASE64: ${{ secrets.MYHKU_ANDROID_KEYSTORE_BASE64 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          node --input-type=module -e 'import fs from "node:fs"; const expected = "v" + JSON.parse(fs.readFileSync("package.json", "utf8")).version; if (process.env.RELEASE_TAG !== expected) throw new Error("Release tag must match package.json: " + expected);'
+      - run: node --test scripts/verify-android-release.test.mjs
+      - name: Prepare Android signing key
+        run: |
+          if [[ -z "$MYHKU_ANDROID_KEYSTORE_BASE64" || -z "$MYHKU_ANDROID_KEY_ALIAS" || -z "$MYHKU_ANDROID_KEYSTORE_PASSWORD" || -z "$MYHKU_ANDROID_KEY_PASSWORD" ]]; then
+            echo "Android release signing credentials are required; unsigned APKs will not be published." >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$MYHKU_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$MYHKU_ANDROID_KEYSTORE_PATH"
+      - name: Build an older signed APK for upgrade verification
+        working-directory: android
+        run: |
+          ./gradlew :app:assembleRelease -PmyhkuVersionCode=3 -PmyhkuVersionName=0.1.3-alpha
+          mkdir -p ../release
+          cp app/build/outputs/apk/release/app-release.apk ../release/android-upgrade-baseline.apk
       - run: ./gradlew :app:bundleRelease :app:assembleRelease
         working-directory: android
-        env:
-          MYHKU_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/myhku-release.jks
-          MYHKU_ANDROID_KEYSTORE_BASE64: ${{ secrets.MYHKU_ANDROID_KEYSTORE_BASE64 }}
-          MYHKU_ANDROID_KEY_ALIAS: ${{ secrets.MYHKU_ANDROID_KEY_ALIAS }}
-          MYHKU_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.MYHKU_ANDROID_KEYSTORE_PASSWORD }}
-          MYHKU_ANDROID_KEY_PASSWORD: ${{ secrets.MYHKU_ANDROID_KEY_PASSWORD }}
-      - name: Build installable test APK when no release key is configured
-        if: ${{ env.MYHKU_ANDROID_KEYSTORE_BASE64 == '' }}
-        run: ./gradlew :app:assembleDebug
-        working-directory: android
+      - name: Verify Android release identity, signatures and alignment
+        run: |
+          mkdir -p release/android
+          cp android/app/build/outputs/apk/release/app-release.apk release/android/
+          cp android/app/build/outputs/bundle/release/app-release.aab release/android/
+          node scripts/verify-android-release.mjs release/android/app-release.apk release/android/app-release.aab 4
+          cp android/release-certificate.sha256 release/android/ANDROID-SIGNING-CERTIFICATE.sha256
+      - name: Enable Android emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install, upgrade and launch on Android 8.0
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 26
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk 4
+      - name: Install, upgrade and launch on Android 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk 4
       - uses: actions/upload-artifact@v4
         with:
           name: android
           path: |
-            android/app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/bundle/release/*.aab
+            release/android/app-release.apk
+            release/android/app-release.aab
+            release/android/ANDROID-SIGNING-CERTIFICATE.sha256
           if-no-files-found: error
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     needs: [desktop, android]
     runs-on: ubuntu-latest
     steps:
@@ -116,13 +163,15 @@ jobs:
           done > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ contains(inputs.release_tag || github.ref_name, '-') }}
           body: |
             最新安装包见 [README 下载与设备对应](https://github.com/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/README.md#下载与设备对应)；安装前请阅读 [各设备安装指南](https://github.com/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/README.md#各设备安装指南)。
 
             - Windows x64：推荐 `MyHKU.Setup.<版本>.exe`；另有免安装 EXE。
             - Mac Apple Silicon：下载 arm64 DMG 或 ZIP，移入 Applications。未公证版本首次打开的系统提示处理方法见安装指南。
-            - Android 8.0+：优先选择 `app-release.apk`；未配置发行签名时提供可直接安装的测试版 `app-debug.apk`。`app-release-unsigned.apk` 需自行签名，AAB 不能直接安装。
+            - Android 8.0+：下载固定签名的 `app-release.apk`；AAB 仅用于分发，不能直接安装。发布前检查签名并验证安装、覆盖升级和启动，不再发布未签名 APK。
             - `SHA256SUMS.txt` 可用于核对下载完整性。
           files: |
             release/**

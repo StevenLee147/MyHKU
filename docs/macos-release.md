@@ -16,7 +16,7 @@ MYHKU_MAC_NOTARIZE=0 MYHKU_RELEASE_DIR=release/desktop npm run desktop:package -
 MYHKU_MAC_NOTARIZE=0 npm run verify:macos-release -- release/desktop
 ```
 
-GitHub Actions 在没有 `MYHKU_MAC_CERTIFICATE_BASE64` secret 时选择默认模式。手动运行 **Release** 工作流会构建并检查产物，不创建 GitHub Release；推送 `v<package.json version>` tag 后，在各平台构建通过时发布。当前不构建 Intel Mac 安装包。
+GitHub Actions 在没有 `MYHKU_MAC_CERTIFICATE_BASE64` secret 时选择默认模式。手动运行 **Release** 工作流且不填写 `release_tag` 时只构建、检查产物；填写与 `package.json` 对应的 `v<version>` 后，会在全部构建及 Android 安装测试通过时为该提交创建 tag 和 GitHub Release。推送已有 `v<package.json version>` tag 也可触发发布。当前不构建 Intel Mac 安装包。
 
 ## 可选：Developer ID 签名与 Apple 公证
 
