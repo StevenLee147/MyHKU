@@ -72,7 +72,6 @@ jobs:
     timeout-minutes: 45
     env:
       MYHKU_ANDROID_KEYSTORE_BASE64: ${{ secrets.MYHKU_ANDROID_KEYSTORE_BASE64 }}
-      MYHKU_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/myhku-release.jks
       MYHKU_ANDROID_KEY_ALIAS: ${{ secrets.MYHKU_ANDROID_KEY_ALIAS }}
       MYHKU_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.MYHKU_ANDROID_KEYSTORE_PASSWORD }}
       MYHKU_ANDROID_KEY_PASSWORD: ${{ secrets.MYHKU_ANDROID_KEY_PASSWORD }}
@@ -101,7 +100,9 @@ jobs:
             exit 1
           fi
           umask 077
-          printf '%s' "$MYHKU_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$MYHKU_ANDROID_KEYSTORE_PATH"
+          keystore_path="$RUNNER_TEMP/myhku-release.jks"
+          printf '%s' "$MYHKU_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          printf 'MYHKU_ANDROID_KEYSTORE_PATH=%s\n' "$keystore_path" >> "$GITHUB_ENV"
       - name: Build an older signed APK for upgrade verification
         working-directory: android
         run: |
