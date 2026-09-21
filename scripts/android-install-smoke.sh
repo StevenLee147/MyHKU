@@ -12,11 +12,12 @@ collect_diagnostics() {
   result=$?
   if [[ $result -ne 0 ]]; then
     set +e
+    timeout 15s adb logcat -d -b crash -v threadtime > "$diagnostics_dir/crashes.txt" 2>&1
     timeout 15s adb logcat -d -v threadtime -t 300 > "$diagnostics_dir/logcat.txt" 2>&1
     timeout 15s adb shell dumpsys activity activities > "$diagnostics_dir/activities.txt" 2>&1
     timeout 15s adb shell dumpsys activity lastanr > "$diagnostics_dir/last-anr.txt" 2>&1
     timeout 15s adb exec-out screencap -p > "$diagnostics_dir/screen.png"
-    cat "$diagnostics_dir/launch.txt" "$diagnostics_dir/last-anr.txt" "$diagnostics_dir/logcat.txt"
+    cat "$diagnostics_dir/launch.txt" "$diagnostics_dir/crashes.txt" "$diagnostics_dir/last-anr.txt" "$diagnostics_dir/logcat.txt"
   fi
   exit "$result"
 }
