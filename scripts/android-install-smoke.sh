@@ -18,7 +18,6 @@ if ! [[ "$package_info" =~ versionCode=$expected_code[[:space:]] ]]; then
   echo 'Installed Android version does not match the release.' >&2
   exit 1
 fi
-adb logcat -c
 adb shell am start -W -n "$package_name/.MainActivity"
 sleep 3
 if ! adb shell pidof "$package_name"; then
