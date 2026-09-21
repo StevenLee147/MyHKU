@@ -126,21 +126,35 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Install, upgrade and launch on Android 8.0
+        id: android26
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 26
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk 4
+          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk 4 26
       - name: Install, upgrade and launch on Android 15
+        id: android35
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk 4
+          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk 4 35
+      - name: Require both Android installation checks to pass
+        if: steps.android26.outcome != 'success' || steps.android35.outcome != 'success'
+        run: exit 1
+      - name: Preserve Android installation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-install-diagnostics
+          path: release/android-install-diagnostics/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -156,7 +170,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
-        with: { path: release }
+        with:
+          path: release
+          pattern: '{desktop-*,android}'
       - name: Create checksums for the final downloadable files
         working-directory: release
         run: |
