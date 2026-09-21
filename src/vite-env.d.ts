@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-type DesktopSessions = Record<'portal' | 'sis' | 'moodle', { state: string; detail?: string; checkedAt?: string }>
+type DesktopSessions = Record<'portal' | 'sis' | 'moodle', { state: string; detail?: string; checkedAt?: string; revision?: number }>
 interface Window {
   myhkuDesktop?: {
     platform?: string
@@ -13,7 +13,7 @@ interface Window {
     clearAccount?: () => Promise<unknown>
     changeScheduleWeek?: (offset: number) => Promise<unknown>
     onHkuUpdated?: (listener: (payload?: { site?: string; fetchedAt?: string }) => void) => () => void
-    onAuthStatus?: (listener: (payload?: { state?: string; url?: string; detail?: string; requires2fa?: boolean; sessions?: DesktopSessions }) => void) => () => void
+    onAuthStatus?: (listener: (payload?: { state?: string; configured?: boolean; url?: string; detail?: string; requires2fa?: boolean; sessions?: DesktopSessions }) => void) => () => void
   }
   myhkuAndroid?: {
     getSnapshot?: () => string

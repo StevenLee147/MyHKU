@@ -36,6 +36,7 @@ const windowFlows = new WeakMap()
 const auth = new AuthCoordinator(startServiceLogin, publishAuthStatus)
 let quitting = false
 let accountCache
+let changingAccount = false
 const accountFile = () => join(app.getPath('userData'), 'myhku-account.enc')
 
 function readAccount() {
@@ -70,6 +71,16 @@ function clearAccount() {
   try { unlinkSync(accountFile()) } catch { /* already removed */ }
 }
 
+async function resetAccountSessions() {
+  // Destroy old documents before clearing cookies: a late callback must not
+  // recreate the signed-out account's session or update a replacement record.
+  auth.reset()
+  for (const win of authWindows) if (!win.isDestroyed()) win.destroy()
+  const official = (await import('electron')).session.fromPartition('persist:myhku-hku')
+  await official.clearStorageData()
+  await official.clearAuthCache()
+}
+
 function notifyAuthStatus(payload) {
   if (!dashboard || dashboard.isDestroyed()) return
   try { dashboard.webContents.send('myhku-auth-status', payload) } catch { /* dashboard may be closing */ }
@@ -85,7 +96,7 @@ function authStatus() {
   const manual = values.find(item => ['needs_2fa', 'manual_required'].includes(item.state))
   const pending = values.some(item => ['checking', 'queued'].includes(item.state))
   const state = manual?.state || (pending ? 'checking' : values.every(item => item.state === 'connected') ? 'connected' : 'ready')
-  return { state, detail: manual?.detail || (pending ? '正在自动恢复 HKU 连接…' : ''), sessions }
+  return { state, configured: Boolean(readAccount()), detail: manual?.detail || (pending ? '正在自动恢复 HKU 连接…' : ''), sessions }
 }
 
 function isAllowedUrl(value) {
@@ -154,125 +165,240 @@ async function publishPage(frame) {
   } catch { /* navigation can destroy the old document */ }
 }
 
+async function inspectFrame(frame, code) {
+  let timer
+  try {
+    return await Promise.race([
+      frame.executeJavaScript(code, true),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Auth inspection timed out')), AUTH_TIMING.inspect) }),
+    ])
+  } finally { clearTimeout(timer) }
+}
+
+function serviceFrames(win, site) {
+  const frames = [...win.webContents.mainFrame.frames]
+  const matching = []
+  for (const frame of frames) {
+    try {
+      frames.push(...frame.frames)
+      if (isAllowedUrl(frame.url) && serviceForUrl(frame.url) === site) matching.push(frame)
+    } catch { /* detached frame */ }
+  }
+  return matching
+}
+
 function attachConnector(win, record) {
   let generation = 0
-  let settledAt = Date.now()
+  let documentReady = false
   let startedAt = Date.now()
-  let busy = false
-  let provedAt = 0
+  let busy = null
+  let proof = null
   let published = false
   let resumedService = false
+  let allowCredentials = true
+  let lastInspection = ''
+  let confirmationTimer
   const attempts = new Map()
-  const navigate = () => {
+  const currentRecord = () => !win.isDestroyed() && (!record || auth.records.get(record.site) === record)
+  const invalidate = () => {
     generation++
-    settledAt = Date.now()
-    provedAt = 0
+    busy = null
+    proof = null
     published = false
-    if (record && record.state === 'connected') {
-      // Navigation from an authenticated page may expire the session. Queue
-      // revalidation without ever reloading a flow already negotiating SSO.
-      record.state = 'queued'
-      record.revalidate = true
-      auth.pump()
-    }
+    clearTimeout(confirmationTimer)
   }
-  win.webContents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => {
-    if (mainFrame && !inPlace) navigate()
-  })
-  win.webContents.on('did-finish-load', () => { settledAt = Date.now() })
+  const requireManual = (state, detail) => {
+    if (state === 'manual_required') allowCredentials = false
+    if (record.state === state && record.detail === detail) return
+    auth.update(record.site, state, detail)
+    if (!win.isVisible()) win.show()
+  }
   const check = async () => {
-    if (busy || win.isDestroyed() || win.webContents.isLoading() || Date.now() - settledAt < AUTH_TIMING.settle) return
-    if (record && auth.records.get(record.site) !== record) return
-    if (record && auth.active !== record.site && record.state !== 'connected') return
-    busy = true
+    if (!currentRecord()) return
+    // A hung document or renderer cannot monopolize the SSO queue.
+    if (record && auth.active === record.site && record.state === 'checking' && Date.now() - startedAt >= AUTH_TIMING.timeout) {
+      requireManual('manual_required', '登录页面长时间未完成，请查看官方窗口提示；其他服务将继续连接')
+    }
+    if (busy || !documentReady || record?.state === 'queued') return
+    const token = busy = {}
     const version = generation
+    const valid = () => currentRecord() && version === generation && busy === token
     try {
       const current = win.webContents.getURL()
       if (!isAllowedUrl(current)) return
-      const canAct = record && auth.active === record.site && !['manual_required', 'error'].includes(record.state)
-      const account = canAct && !serviceForUrl(current) ? readAccount() : null
-      const credentials = account ? { email: account.email, password: account.password } : null
+      const account = record && allowCredentials && !serviceForUrl(current) ? readAccount() : null
+      // Read-only inspection needs only an account hint. Send the password
+      // solely when this record owns the automatic action queue.
+      const hint = account ? { email: account.email } : null
       const script = `(${inspectAuthPage.toString()})`
-      let result = await win.webContents.executeJavaScript(`${script}(${JSON.stringify(credentials)}, false)`, true)
-      if (win.isDestroyed() || version !== generation) return
-      if (canAct && result.state === 'automatic') {
-        const count = attempts.get(result.action) || 0
-        if (count >= 2) result = { state: 'manual_required', detail: '官方登录反复返回同一步，请查看窗口提示后继续' }
-        else {
-          // Count before dispatch: navigation may cancel the script result
-          // after a successful submit, and must not permit unlimited retries.
-          attempts.set(result.action, count + 1)
-          result = await win.webContents.executeJavaScript(`${script}(${JSON.stringify(credentials)}, true)`, true)
-        }
+      const target = JSON.stringify(record?.site || null)
+      const mainFrame = win.webContents.mainFrame
+      const primary = inspectFrame(mainFrame, `${script}(${JSON.stringify(hint)}, false, ${target})`)
+      let result
+      if (record && serviceForUrl(current) === record.site) {
+        const children = serviceFrames(win, record.site)
+        if (children.length) {
+          // Start child checks together. A slow sibling must not hide a
+          // usable PeopleSoft frame, but a top-level login form wins over
+          // leftover content in an embedded frame.
+          const evidence = Promise.any(children.map(async frame => {
+            const child = await inspectFrame(frame, `${script}(null, false)`)
+            if (child.state !== 'authenticated') throw new Error('No session evidence')
+            return child
+          }))
+          const childResult = evidence.catch(() => null)
+          const top = await primary.catch(() => ({ state: 'waiting' }))
+          result = top.state === 'waiting' ? (await childResult) || top : top
+        } else result = await primary
+      } else result = await primary
+      if (!valid()) return
+      const inspection = `${record?.site || 'browse'} ${result.state} ${result.action || ''}`.trim()
+      if (inspection !== lastInspection) {
+        lastInspection = inspection
+        authTrace('auth-inspection', current, inspection)
       }
-      if (win.isDestroyed() || version !== generation) return
-      if (record && (result.state === 'sso_authenticated' || (result.state === 'authenticated' && serviceForUrl(current) !== record.site))) {
-        if (!resumedService) {
-          resumedService = true
-          await win.loadURL(SERVICE_URLS[record.site])
-        } else if (Date.now() - startedAt >= AUTH_TIMING.manual) {
-          auth.update(record.site, 'manual_required', '已登录 Portal，目标服务尚未返回，请查看官方窗口')
-          if (!win.isVisible()) win.show()
+      const ownService = result.state === 'authenticated' && (!record || serviceForUrl(current) === record.site)
+      if (ownService) {
+        if (!proof || proof.url !== current) proof = { url: current, at: Date.now() }
+        const remaining = AUTH_TIMING.settle - (Date.now() - proof.at)
+        if (remaining > 0) {
+          clearTimeout(confirmationTimer)
+          confirmationTimer = setTimeout(check, remaining)
+          return
         }
-        return
-      }
-      if (result.state === 'authenticated') {
-        provedAt ||= Date.now()
-        // Require two stable observations, including a quiet redirect period.
-        if (Date.now() - provedAt < AUTH_TIMING.settle) return
         if (record && record.state !== 'connected') {
+          record.signedOut = false
           auth.update(record.site, 'connected', '已验证官方登录会话')
           if (!record.browse && win.isVisible()) win.hide()
         }
         if (!published) {
           published = true
-          void publishPage(win.webContents)
-          for (const frame of win.webContents.mainFrame.frames) void publishPage(frame)
+          void publishPage(mainFrame)
+          for (const frame of serviceFrames(win, record?.site || serviceForUrl(current))) void publishPage(frame)
+        }
+        // SIS login is already complete. Opening its timetable must never
+        // keep Moodle waiting or turn a connected session back into checking.
+        if (result.action === 'sis-timetable' && !record?.browse && (attempts.get(result.action) || 0) < 2) {
+          attempts.set(result.action, (attempts.get(result.action) || 0) + 1)
+          await inspectFrame(mainFrame, `${script}(null, true, ${target})`)
         }
         return
       }
-      provedAt = 0
+      proof = null
       if (!record) return
+      if (result.state === 'signed_out') {
+        allowCredentials = false
+        record.signedOut = true
+        auth.update(record.site, 'disconnected', result.detail)
+        return
+      }
+      // An explicit logout must not immediately refill the saved password
+      // on the destination login page. Only a new connection request resumes.
+      if (record.signedOut) return
+      const serviceNavigation = ['portal', 'sis-portal', 'sis-entry', 'moodle-cas', 'stay-signed-in'].includes(result.action)
+      const resumeService = result.state === 'sso_authenticated' || result.state === 'authenticated'
+      const actionable = result.state === 'automatic' && (allowCredentials || serviceNavigation)
       if (record.state === 'connected') {
+        // Empty/loading pages are not proof of expiry. Keep a verified
+        // session through ordinary navigation; reauthenticate on a challenge.
+        if (!['automatic', 'manual_required', 'needs_2fa', 'sso_authenticated'].includes(result.state)) return
         record.revalidate = true
         auth.request(record.site, { refresh: true })
         return
       }
-      if (result.state === 'submitted') {
-        settledAt = Date.now()
+      if (record.state === 'error' && !resumeService && !(actionable && serviceNavigation)) return
+      if ((actionable || resumeService) && auth.active !== record.site) {
+        auth.request(record.site, { resume: true })
+        return
       }
-      if (result.state === 'needs_2fa' || (result.state === 'manual_required' && Date.now() - startedAt >= AUTH_TIMING.manual)) {
-        if (record.state !== result.state) {
-          auth.update(record.site, result.state, result.detail)
-          if (!win.isVisible()) win.show()
+      if (resumeService) {
+        if (!resumedService) {
+          resumedService = true
+          win.loadURL(record.site === 'sis' ? SERVICE_URLS.portal : SERVICE_URLS[record.site]).catch(() => {})
+        } else if (Date.now() - startedAt >= AUTH_TIMING.manual) {
+          requireManual('manual_required', '身份验证已完成，目标服务尚未返回，请查看官方窗口')
         }
-      } else if (Date.now() - startedAt >= AUTH_TIMING.timeout && !['manual_required', 'needs_2fa', 'error'].includes(record.state)) {
-        auth.update(record.site, 'manual_required', '登录页面长时间未完成，请查看官方窗口提示')
-        if (!win.isVisible()) win.show()
+        return
       }
-    } catch { /* a redirect can cancel executeJavaScript; poll the new page */ }
-    finally { busy = false }
+      if (actionable && auth.active === record.site) {
+        const count = attempts.get(result.action) || 0
+        if (count >= 2) {
+          requireManual('manual_required', '官方登录反复返回同一步，请查看窗口提示后继续')
+          return
+        }
+        attempts.set(result.action, count + 1)
+        const credentials = account ? { email: account.email, password: account.password } : null
+        result = await inspectFrame(mainFrame, `${script}(${JSON.stringify(credentials)}, true, ${target})`)
+        if (!valid()) return
+      }
+      if (result.state === 'needs_2fa' || (result.state === 'manual_required' &&
+        (result.immediate || Date.now() - startedAt >= AUTH_TIMING.manual))) {
+        requireManual(result.state, result.detail)
+      }
+    } catch {
+      if (!valid()) return
+      proof = null
+      authTrace('auth-inspection-interrupted', win.webContents.getURL(), record?.site || 'browse')
+    } finally {
+      if (busy === token) busy = null
+    }
   }
+  win.webContents.on('did-start-navigation', (_event, url, inPlace, mainFrame) => {
+    if (!mainFrame) return
+    invalidate()
+    if (!inPlace) documentReady = false
+    if (record && currentRecord() && isAllowedUrl(url)) {
+      const target = new URL(url)
+      if (/(?:\/logout(?:\/|\.|$)|\/signout(?:\/|\.|$)|\/Account\/Login\/LogOff(?:\/|$)|\/PortalLogout$|\.PortalLogout$)/i.test(target.pathname) || target.searchParams.get('cmd')?.toLowerCase() === 'logout') {
+        allowCredentials = false
+        record.signedOut = true
+        auth.update(record.site, 'disconnected', '已退出官方登录，请重新连接')
+      }
+    }
+  })
+  win.webContents.on('did-navigate', () => { documentReady = true; void check() })
+  win.webContents.on('dom-ready', () => { documentReady = true; void check() })
+  win.webContents.on('did-navigate-in-page', () => { void check() })
+  win.webContents.on('did-stop-loading', () => { documentReady = true; void check() })
   win.webContents.on('did-frame-finish-load', (_event, mainFrame, processId, routingId) => {
-    if (mainFrame || win.isDestroyed() || record?.state !== 'connected') return
+    void check()
+    if (mainFrame || !currentRecord() || record?.state !== 'connected') return
     const frame = webFrameMain.fromId(processId, routingId)
-    if (frame) void publishPage(frame)
+    if (frame && isAllowedUrl(frame.url) && serviceForUrl(frame.url) === record.site) void publishPage(frame)
   })
   const timer = setInterval(check, AUTH_TIMING.poll)
-  windowFlows.set(win, { restart() { startedAt = Date.now(); settledAt = Date.now(); published = false; resumedService = false; attempts.clear() } })
-  win.once('closed', () => clearInterval(timer))
+  windowFlows.set(win, {
+    restart({ resume = false } = {}) {
+      invalidate()
+      startedAt = Date.now()
+      if (!resume) { resumedService = false; allowCredentials = true; attempts.clear() }
+      // Do not inspect synchronously: startServiceLogin may still navigate.
+      queueMicrotask(check)
+    },
+  })
+  win.once('closed', () => { clearInterval(timer); clearTimeout(confirmationTimer) })
 }
 
 function startServiceLogin(record) {
+  record.signedOut = false
   let win = record.window
   if (!win || win.isDestroyed()) {
-    win = createAuthWindow(SERVICE_URLS[record.site], false, record)
+    // The SIS deep link displays a blocking JavaScript dialog when its
+    // session has expired. Always establish it through the Portal entry.
+    win = createAuthWindow(record.site === 'sis' ? SERVICE_URLS.portal : SERVICE_URLS[record.site], false, record)
     record.window = win
   } else {
-    windowFlows.get(win)?.restart()
-    if (!record.revalidate && !win.webContents.isLoading()) win.loadURL(SERVICE_URLS[record.site]).catch(() => {})
+    windowFlows.get(win)?.restart({ resume: record.resume })
+    if (!record.revalidate && !record.resume) {
+      const current = win.webContents.getURL()
+      const url = record.site === 'sis' ? SERVICE_URLS.portal : record.refresh && serviceForUrl(current) === record.site ? current : SERVICE_URLS[record.site]
+      win.loadURL(url).catch(() => {})
+    }
   }
+  if (record.openWhenStarted) { record.openWhenStarted = false; win.show() }
   record.revalidate = false
+  record.resume = false
+  record.refresh = false
 }
 
 function attachDownloadHandler(win) {
@@ -294,10 +420,10 @@ function createAuthWindow(url, show = true, record = null) {
     show,
     title: 'MyHKU · HKU 登录',
     webPreferences: {
-      preload: preloadFile,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      backgroundThrottling: false,
       partition: 'persist:myhku-hku',
     },
   })
@@ -316,10 +442,18 @@ function createAuthWindow(url, show = true, record = null) {
       auth.update(record.site, 'disconnected', '官方窗口已关闭，连接检查已停止')
     }
   })
-  win.webContents.setWindowOpenHandler(({ url: childUrl }) => {
+  win.webContents.setWindowOpenHandler(({ url: childUrl, referrer, postBody }) => {
     if (isAllowedUrl(childUrl)) {
       // Keep the same flow identity and persistent partition through popups.
-      win.loadURL(childUrl).catch(() => {})
+      // SIS validates that its entry was opened from Portal. Preserve the
+      // browser's referrer policy and any official form POST through popups.
+      win.loadURL(childUrl, {
+        httpReferrer: referrer,
+        ...(postBody ? {
+          postData: postBody.data,
+          extraHeaders: `Content-Type: ${postBody.contentType}${postBody.boundary ? `; boundary=${postBody.boundary}` : ''}`,
+        } : {}),
+      }).catch(() => {})
       return { action: 'deny' }
     }
     shell.openExternal(childUrl).catch(() => {})
@@ -331,11 +465,17 @@ function createAuthWindow(url, show = true, record = null) {
       event.preventDefault()
     } else authTrace('will-navigate', nextUrl)
   })
+  win.webContents.on('will-redirect', (event, nextUrl) => {
+    if (!isAllowedUrl(nextUrl)) event.preventDefault()
+  })
   win.webContents.on('did-navigate', (_event, nextUrl) => authTrace('did-navigate', nextUrl))
   win.webContents.on('did-finish-load', () => authTrace('did-finish-load', win.webContents.getURL()))
   win.webContents.on('did-fail-load', (_event, errorCode, _errorDescription, validatedURL, mainFrame) => {
     authTrace('did-fail-load', validatedURL, String(errorCode))
     if (mainFrame && errorCode !== -3 && record && auth.records.get(record.site) === record) auth.update(record.site, 'error', '官方页面加载失败，请检查网络后重试')
+  })
+  win.webContents.on('render-process-gone', () => {
+    if (record && auth.records.get(record.site) === record) auth.update(record.site, 'error', '官方页面已停止响应，请重试连接')
   })
   attachConnector(win, record)
   attachDownloadHandler(win)
@@ -367,12 +507,15 @@ function createDashboard() {
   dashboard.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedUrl(url)) {
       const site = serviceForUrl(url)
-      const record = site && auth.records.get(site)
+      const record = site && auth.request(site)
       if (record?.window && !record.window.isDestroyed()) {
-        record.browse = true
+        // A page opened to finish login should disappear on success. Keep
+        // windows open only when the user is browsing a connected service.
+        record.browse = record.state === 'connected'
         record.window.show()
         if (record.state === 'connected') record.window.loadURL(url).catch(() => {})
-      } else createAuthWindow(url)
+      } else if (record) record.openWhenStarted = true
+      else if (!site) createAuthWindow(url)
       return { action: 'deny' }
     }
     shell.openExternal(url).catch(() => {})
@@ -403,50 +546,67 @@ function startDashboardServer() {
   uiServer.listen(Number(uiPort), '127.0.0.1')
 }
 
-ipcMain.handle('myhku-account-status', async () => {
+function handleDashboard(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!dashboard || dashboard.isDestroyed() || event.sender !== dashboard.webContents ||
+      event.senderFrame !== dashboard.webContents.mainFrame) throw new Error('仅仪表盘可以管理本地账户和登录')
+    if (changingAccount) throw new Error('正在切换账户，请稍后重试')
+    return handler(event, ...args)
+  })
+}
+
+handleDashboard('myhku-account-status', async () => {
   const account = readAccount()
   const status = authStatus()
   return account ? { configured: true, localUsername: account.localUsername, email: account.email, authState: status.state, detail: status.detail, sessions: status.sessions } : { configured: false }
 })
 
-ipcMain.handle('myhku-save-account', async (_event, value) => {
-  const saved = saveAccount(value || {})
-  notifyAuthStatus({ state: 'ready', detail: '账户已安全保存，请开始首次登录' })
-  return { configured: true, ...saved }
+handleDashboard('myhku-save-account', async (_event, value) => {
+  changingAccount = true
+  try {
+    const previous = readAccount()
+    const saved = saveAccount(value || {})
+    if (!previous || previous.email.toLowerCase() !== saved.email.toLowerCase() || previous.password !== String(value?.password || '')) {
+      await resetAccountSessions()
+    }
+    notifyAuthStatus({ ...authStatus(), state: 'ready', detail: '账户已安全保存，请开始首次登录' })
+    return { configured: true, ...saved }
+  } finally { changingAccount = false }
 })
 
-ipcMain.handle('myhku-begin-login', async (_event, show = true) => {
+handleDashboard('myhku-begin-login', async (_event, show = true) => {
   beginLogin(Boolean(show))
   return true
 })
 
-ipcMain.handle('myhku-clear-account', async () => {
-  clearAccount()
-  auth.reset()
-  try { await (await import('electron')).session.fromPartition('persist:myhku-hku').clearStorageData() } catch { /* best effort */ }
-  for (const win of authWindows) if (!win.isDestroyed()) win.close()
-  notifyAuthStatus({ state: 'signed_out' })
-  return true
+handleDashboard('myhku-clear-account', async () => {
+  changingAccount = true
+  try {
+    clearAccount()
+    await resetAccountSessions()
+    notifyAuthStatus({ ...authStatus(), state: 'signed_out' })
+    return true
+  } finally { changingAccount = false }
 })
 
 function beginLogin(show = true) {
   for (const site of Object.keys(SERVICE_URLS)) auth.request(site, { show })
 }
 
-ipcMain.handle('myhku-auth-sessions', () => auth.snapshot())
-ipcMain.handle('myhku-login-site', (_event, site) => {
+handleDashboard('myhku-auth-sessions', () => auth.snapshot())
+handleDashboard('myhku-login-site', (_event, site) => {
   auth.request(site, { show: true })
   return auth.snapshot()
 })
 
-ipcMain.handle('myhku-refresh-hku', () => {
+handleDashboard('myhku-refresh-hku', () => {
   if (readAccount()) {
     for (const site of Object.keys(SERVICE_URLS)) auth.request(site, { refresh: true })
   }
   return authWindows.size
 })
 
-ipcMain.handle('myhku-schedule-week', async (_event, rawOffset) => {
+handleDashboard('myhku-schedule-week', async (_event, rawOffset) => {
   const offset = Math.max(-1, Math.min(1, Number(rawOffset) || 0))
   const record = auth.request('sis')
   const sisWindow = record.window

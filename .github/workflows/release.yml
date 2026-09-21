@@ -31,6 +31,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.MYHKU_APPLE_TEAM_ID }}
       - run: npm ci
       - run: npm run test:macos-release
+      - name: Verify desktop login flows
+        run: npm run test:desktop-auth
       - name: Package Windows
         if: runner.os == 'Windows'
         run: npm run desktop:package -- --win --x64 --publish never

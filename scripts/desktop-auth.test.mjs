@@ -21,7 +21,7 @@ test('redirected windows keep one service identity across repeated startup/login
   assert.equal(starts.length, 3, 'already connected login buttons never start another session')
 })
 
-test('MFA holds the shared SSO queue and continue reveals the existing window', () => {
+test('MFA releases the automatic queue and continue reveals the existing window', () => {
   const starts = []
   let shows = 0
   const auth = new AuthCoordinator(record => { starts.push(record.site); record.window = { show: () => shows++ } })
@@ -29,10 +29,55 @@ test('MFA holds the shared SSO queue and continue reveals the existing window', 
   auth.request('moodle')
   auth.update('portal', 'needs_2fa')
   auth.request('portal', { show: true })
-  assert.deepEqual(starts, ['portal'])
+  assert.deepEqual(starts, ['portal', 'moodle'])
   assert.equal(shows, 1)
   auth.update('portal', 'connected')
   assert.deepEqual(starts, ['portal', 'moodle'])
+})
+
+test('manual timeout releases the queue and a resumed flow never reloads or duplicates its turn', () => {
+  const starts = []
+  const auth = new AuthCoordinator(record => starts.push([record.site, Boolean(record.resume)]))
+  auth.request('portal')
+  auth.request('sis')
+  auth.update('portal', 'manual_required')
+  assert.equal(auth.active, 'sis')
+  auth.request('portal', { resume: true })
+  auth.request('portal', { resume: true })
+  auth.update('sis', 'connected')
+  assert.deepEqual(starts, [['portal', false], ['sis', false], ['portal', true]])
+})
+
+test('window startup failures release the queue, including asynchronous rejection', async () => {
+  const auth = new AuthCoordinator(record => {
+    if (record.site === 'portal') throw new Error('Window failed')
+    if (record.site === 'sis') return Promise.reject(new Error('Navigation failed'))
+  })
+  for (const site of ['portal', 'sis', 'moodle']) auth.request(site)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(auth.snapshot().portal.state, 'error')
+  assert.equal(auth.snapshot().sis.state, 'error')
+  assert.equal(auth.active, 'moodle')
+})
+
+test('late failures from a reset account cannot modify a replacement login', async () => {
+  let fail
+  let first = true
+  const auth = new AuthCoordinator(() => {
+    if (!first) return
+    first = false
+    return new Promise((_, reject) => { fail = reject })
+  })
+  auth.request('portal')
+  const previous = auth.snapshot().portal.revision
+  auth.reset()
+  assert.ok(auth.snapshot().portal.revision > previous)
+  auth.request('portal')
+  fail(new Error('Old window failed'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(auth.snapshot().portal.state, 'checking')
+  auth.update('portal', 'connected')
+  assert.ok(auth.snapshot().portal.revision > previous)
 })
 
 test('connection status is available before extraction and survives a dashboard reload', () => {
@@ -65,4 +110,5 @@ test('SIS aliases map to SIS while identity and unrelated hosts prove no service
   for (const host of ['sweb', 'sis-main', 'intraweb']) assert.equal(serviceForUrl(`https://${host}.hku.hk/`), 'sis')
   assert.equal(serviceForUrl('https://login.microsoftonline.com/'), null)
   assert.equal(serviceForUrl('https://studentportal.hku.hk.evil.test/'), null)
+  assert.equal(serviceForUrl('http://studentportal.hku.hk/'), null)
 })

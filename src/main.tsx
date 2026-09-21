@@ -32,14 +32,14 @@ function AccountSetup({ onReady }: { onReady: (account: { username: string; emai
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setError('')
     if (!username.trim() || !email.trim() || !password) { setError('请填写本地用户名、HKU 邮箱和密码'); return }
-    if (!email.toLowerCase().endsWith('@connect.hku.hk')) { setError('请输入 @connect.hku.hk 邮箱'); return }
+    if (!email.trim().toLowerCase().endsWith('@connect.hku.hk')) { setError('请输入 @connect.hku.hk 邮箱'); return }
     const save = window.myhkuDesktop?.saveAccount
     if (!save) { setError('请在 MyHKU 桌面版中完成首次账户设置'); return }
     setBusy(true)
     try {
       const result = await save({ localUsername: username.trim(), email: email.trim(), password })
-      onReady({ username: result.localUsername || username.trim(), email: result.email || email.trim() })
       await window.myhkuDesktop?.beginLogin?.()
+      onReady({ username: result.localUsername || username.trim(), email: result.email || email.trim() })
     } catch (cause) { setError(cause instanceof Error ? cause.message : '账户保存失败') }
     finally { setBusy(false); setPassword('') }
   }
@@ -64,14 +64,15 @@ function ConnectionSettings({ mode, setMode, states, setStates, onNotice }: {
   }
   const check = async (site: HkuSite) => {
     setChecking(site)
-    await checkConnection(site)
-    setStates(getConnectionStates())
-    setChecking(null)
+    try { await checkConnection(site); setStates(getConnectionStates()) }
+    catch { onNotice('无法读取连接状态，请稍后重试') }
+    finally { setChecking(null) }
   }
   const checkAll = async () => {
     setChecking('all')
-    setStates(await checkAllConnections())
-    setChecking(null)
+    try { setStates(await checkAllConnections()) }
+    catch { onNotice('无法读取连接状态，请稍后重试') }
+    finally { setChecking(null) }
   }
   return <section className="panel connections-panel">
     <div className="panel-head"><div><h2>HKU 服务连接</h2><p>账户凭据保存在本机系统安全存储，登录仍通过 HKU 官方页面完成</p></div><button className="text-btn" onClick={checkAll} disabled={checking !== null}><RefreshCw size={13} className={checking === 'all' ? 'spin' : ''}/> 检查全部</button></div>
@@ -89,8 +90,6 @@ function App() {
   const [authReady, setAuthReady] = useState(false)
   const [accountConfigured, setAccountConfigured] = useState(false)
   const [account, setAccount] = useState<{ username?: string; email?: string }>({})
-  const [authState, setAuthState] = useState('checking')
-  const [authDetail, setAuthDetail] = useState('正在检查本地 HKU 账户…')
   const [active, setActive] = useState<NavKey>('overview')
   const [mobileNav, setMobileNav] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -113,15 +112,24 @@ function App() {
   const syncRef = useRef<(refreshOfficial?: boolean) => void>(() => {})
   useEffect(() => {
     let active = true
+    let statusEvents = 0
+    const stop = window.myhkuDesktop?.onAuthStatus?.(payload => {
+      if (!active || !payload) return
+      statusEvents++
+      if (payload.sessions) setConnections(applyDesktopSessions(payload.sessions))
+      if (payload.configured !== undefined) setAccountConfigured(payload.configured)
+      if (payload.state === 'signed_out') { setAccountConfigured(false); setAccount({}); setLiveSnapshot(null) }
+    })
     const load = async () => {
+      const version = statusEvents
       const status = await window.myhkuDesktop?.accountStatus?.()
       if (!active) return
-      if (!status) { setAuthReady(true); setAccountConfigured(true); setAuthState('ready'); setAuthDetail('浏览器预览模式') ; return }
-      setAccountConfigured(Boolean(status.configured)); setAccount({ username: status.localUsername, email: status.email }); setAuthState(status.authState || (status.configured ? 'ready' : 'setup')); setAuthDetail(status.detail || (status.configured ? '已保存账户，正在尝试登录' : '请先创建账户')); setAuthReady(true)
+      if (!status) { setAuthReady(true); setAccountConfigured(true); return }
+      if (version === statusEvents) setAccountConfigured(Boolean(status.configured))
+      setAccount({ username: status.localUsername, email: status.email }); setAuthReady(true)
       if (status.sessions) setConnections(applyDesktopSessions(status.sessions))
     }
-    load().catch(() => { if (active) { setAuthReady(true); setAuthState('error'); setAuthDetail('无法读取本地账户状态') } })
-    const stop = window.myhkuDesktop?.onAuthStatus?.(payload => { if (!active || !payload) return; const state = payload.state || 'checking'; setAuthState(state); setAuthDetail(payload.detail || ''); if (payload.sessions) setConnections(applyDesktopSessions(payload.sessions)); if (state === 'connected' || state === 'ready' || state === 'needs_2fa') setAccountConfigured(true) })
+    load().catch(() => { if (active) { setAuthReady(true); setNotice('无法读取本地账户状态') } })
     return () => { active = false; stop?.() }
   }, [])
   const sync = (refreshOfficialPages = true) => {
@@ -201,24 +209,25 @@ function App() {
   }, [authReady, accountConfigured])
   const title = navItems.find(n => n.key === active)?.label ?? '概览'
   const connectedCount = Object.values(connections).filter(item => item.state === 'connected').length
+  const manualConnection = Object.values(connections).find(item => item.state === 'login_pending')
   const connectionPhase: ConnectionPhase = Object.values(connections).some(item => item.state === 'login_pending') ? 'manual' : Object.values(connections).some(item => item.state === 'checking') ? 'checking' : connectedCount > 0 ? 'connected' : 'disconnected'
   const accountLabel = dataMode === 'demo' ? '演示数据' : connectedCount === 3 ? '已安全连接' : connectedCount ? `${connectedCount}/3 个服务已连接` : '需要连接 HKU'
   const now = new Date()
   const today = { weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'long' }).format(now), date: `${now.getMonth() + 1} 月 ${now.getDate()} 日` }
   const filteredDue = useMemo(() => dueItems.filter(i => `${i.title}${i.course}`.toLowerCase().includes(query.toLowerCase())), [query])
   if (!authReady) return <div className="account-gate"><div className="account-loading"><RefreshCw size={22} className="spin"/> 正在准备 MyHKU…</div></div>
-  if (!accountConfigured) return <AccountSetup onReady={next => { setAccount(next); setAccountConfigured(true); setAuthState('checking'); setAuthDetail('正在自动登录，需要验证时会显示官方窗口') }} />
+  if (!accountConfigured) return <AccountSetup onReady={next => { setAccount(next); setAccountConfigured(true) }} />
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
       <div className="brand"><div className="brand-mark">▣</div><span>My<span>HKU</span></span><button className="close-nav" onClick={() => setMobileNav(false)}><X size={18}/></button></div>
       <div className="workspace"><span className="workspace-label">当前空间</span><strong>学习空间</strong><ChevronDown size={15}/></div>
       <nav>{navItems.map(({ key, label, icon: Icon }) => <button key={key} className={active === key ? 'active' : ''} onClick={() => { setActive(key); setMobileNav(false) }}><Icon size={18}/><span>{label}</span>{key === 'moodle' && <i className="nav-dot"/>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="login-state"><span className={`state-dot ${dataMode === 'live' && connectedCount === 0 ? 'offline' : ''}`}/> <div><small>HKU 账号</small><strong>{authState === 'needs_2fa' ? '等待身份验证' : Object.values(connections).some(item => item.state === 'checking') ? '正在自动连接 HKU' : accountLabel}</strong></div></div><button className="user-mini"><span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span><span>{account.username || '用户'}</span><ChevronDown size={14}/></button></div>
+      <div className="sidebar-bottom"><div className="login-state"><span className={`state-dot ${dataMode === 'live' && connectedCount === 0 ? 'offline' : ''}`}/> <div><small>HKU 账号</small><strong>{manualConnection?.nativeState === 'needs_2fa' ? '等待身份验证' : Object.values(connections).some(item => item.state === 'checking') ? '正在自动连接 HKU' : accountLabel}</strong></div></div><button className="user-mini"><span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span><span>{account.username || '用户'}</span><ChevronDown size={14}/></button></div>
     </aside>
     {mobileNav && <div className="backdrop" onClick={() => setMobileNav(false)}/>} 
     <main className="main">
       <header className="topbar"><button className="menu-toggle" onClick={() => setMobileNav(true)}><Menu size={21}/></button><div className="crumb"><span>学习空间</span><b>/</b><strong>{title}</strong></div><div className="top-actions"><label className="search"><Search size={17}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索课程、资料…"/><kbd>⌘ K</kbd></label><button className="icon-btn" aria-label="通知" onClick={() => { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission() }}><Bell size={19}/><i/></button><div className="user"><span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span><span><b>{account.username || '用户'}</b><small>{account.email || 'HKU Student'}</small></span><ChevronDown size={15}/></div></div></header>
-      {(authState === 'needs_2fa' || authState === 'manual_required' || authState === 'login_pending') && <div className="auth-banner"><ShieldCheck size={15}/><span>{authDetail || '请在 HKU 官方窗口完成登录；完成后会自动回到 MyHKU'}</span></div>}
+      {manualConnection && <div className="auth-banner"><ShieldCheck size={15}/><span>{manualConnection.detail || '请在 HKU 官方窗口完成登录；完成后会自动回到 MyHKU'}</span></div>}
       {notice && <div className={`toast ${refreshing ? 'loading' : 'success'}`}>{refreshing ? <RefreshCw className="spin" size={15}/> : <CheckCircle2 size={15}/>} {notice}</div>}
       <div className="content">
         <div className="page-heading"><div><p className="eyebrow">{today.weekday} · {today.date}</p><h1>早上好，{account.username || '同学'} <span>✦</span></h1><p className="subtitle">这是你今天的学习概览。</p></div><button className="refresh-btn" onClick={() => sync()} disabled={refreshing}><RefreshCw size={16} className={refreshing ? 'spin' : ''}/>{refreshing ? '同步中…' : '立即刷新'}</button></div>

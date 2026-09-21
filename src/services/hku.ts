@@ -13,6 +13,7 @@ export type DataMode = 'demo' | 'live'
 
 export type SiteConnection = {
   state: ConnectionState
+  nativeState?: string
   checkedAt?: string
   detail?: string
 }
@@ -92,20 +93,27 @@ export function getConnectionStates(): Record<HkuSite, SiteConnection> {
 }
 
 function save(states: Record<HkuSite, SiteConnection>) {
-  localStorage.setItem(STATE_KEY, JSON.stringify(states))
+  try { localStorage.setItem(STATE_KEY, JSON.stringify(states)) } catch { /* UI still receives live state when storage is unavailable */ }
   return states
 }
+
+// Compare only observations from this renderer lifetime. Native revisions
+// restart with the app and must never be compared with persisted UI state.
+const latestDesktopSessions: Partial<DesktopSessions> = {}
 
 /** Native auth state is independent of whether course extraction has finished. */
 export function applyDesktopSessions(sessions: DesktopSessions): Record<HkuSite, SiteConnection> {
   const states = defaultStates()
   for (const site of Object.keys(states) as HkuSite[]) {
-    const item = sessions[site]
+    const incoming = sessions[site]
+    const previous = latestDesktopSessions[site]
+    const item = previous && (previous.revision ?? -1) > (incoming?.revision ?? -1) ? previous : incoming || previous || { state: 'disconnected' }
+    latestDesktopSessions[site] = item
     const state: ConnectionState = item.state === 'connected' ? 'connected'
       : ['queued', 'checking'].includes(item.state) ? 'checking'
       : ['manual_required', 'needs_2fa'].includes(item.state) ? 'login_pending'
       : item.state === 'error' ? 'error' : 'disconnected'
-    states[site] = { state, detail: item.detail, checkedAt: item.checkedAt }
+    states[site] = { state, nativeState: item.state, detail: item.detail, checkedAt: item.checkedAt }
   }
   return save(states)
 }

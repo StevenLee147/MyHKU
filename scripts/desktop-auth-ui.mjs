@@ -13,10 +13,18 @@ app.whenReady().then(async () => {
   const bundle = index.match(/src="\.\/([^"\s]+\.js)"/)[1]
   const source = readFileSync(new URL(`../dist/${bundle}`, import.meta.url), 'utf8')
   const mock = `
-    window.sessions = Object.fromEntries(['portal', 'sis', 'moodle'].map(site => [site, { state: 'checking' }]));
+    window.sessions = Object.fromEntries(['portal', 'sis', 'moodle'].map(site => [site, { state: 'checking', revision: 1 }]));
     window.myhkuDesktop = {
       accountStatus: async () => ({ configured: true, localUsername: 'Fixture', email: 'student@example.test', sessions: window.sessions }),
-      authSessions: async () => window.sessions,
+      authSessions: async () => {
+        if (window.failReads) throw new Error('Fixture IPC unavailable');
+        if (window.holdNextRead) {
+          window.holdNextRead = false;
+          const captured = structuredClone(window.sessions);
+          return new Promise(resolve => { window.releaseRead = () => resolve(captured) });
+        }
+        return window.sessions;
+      },
       onAuthStatus: callback => { window.authChanged = callback; return () => {} },
       onHkuUpdated: callback => { window.dataChanged = callback; return () => {} },
       refreshHku: async () => 3
@@ -38,14 +46,27 @@ app.whenReady().then(async () => {
   await until('document.body.innerText.includes("正在自动连接 HKU")')
   assert.equal(await run('document.body.innerText.includes("真实数据尚未连接")'), false)
   assert.equal(await run('document.body.innerText.includes("等待完成 2FA")'), false)
-  await run(`window.sessions = Object.fromEntries(['portal', 'sis', 'moodle'].map(site => [site, { state: 'connected' }])); window.authChanged({ state: 'connected', sessions: window.sessions })`)
+  await run(`window.sessions.portal = { state: 'needs_2fa', revision: 2 }; window.authChanged({ state: 'needs_2fa', sessions: window.sessions }); window.holdNextRead = true`)
+  await until('document.querySelector(".auth-banner") !== null && typeof window.releaseRead === "function"')
+  await run(`window.sessions = Object.fromEntries(['portal', 'sis', 'moodle'].map(site => [site, { state: 'connected', revision: 3 }])); window.authChanged({ state: 'connected', sessions: window.sessions })`)
   await until('document.body.innerText.includes("HKU 已连接，正在读取数据")')
+  await run('window.releaseRead()')
+  await new Promise(resolve => setTimeout(resolve, 200))
+  assert.equal(await run('document.querySelector(".auth-banner") === null && document.body.innerText.includes("已安全连接")'), true, 'late polling response cannot undo a newer login event')
+  await run(`window.sessions.portal = { state: 'needs_2fa', revision: 4 }; window.authChanged({ state: 'needs_2fa', sessions: window.sessions })`)
+  await until('document.querySelector(".auth-banner") !== null')
+  await run(`window.sessions.portal = { state: 'connected', revision: 5 }`)
+  await until('document.querySelector(".auth-banner") === null && document.body.innerText.includes("已安全连接")')
   assert.equal(await run('document.body.innerText.includes("重新检查")'), false, 'already logged in never asks for another login/check')
   await run('window.snapshotReady = true; window.dataChanged()')
   await until('document.body.innerText.includes("今日课程")')
   await run('[...document.querySelectorAll("nav button")].find(node => node.innerText.includes("设置")).click()')
   await until('document.querySelectorAll(".connection-state.connected").length === 3')
   assert.equal(await run('[...document.querySelectorAll(".login-link")].every(node => node.disabled && node.innerText.includes("已连接"))'), true)
-  console.log('PASS dashboard UI: automatic connection, logged-in data loading, automatic data arrival, connected service buttons')
+  await run('window.failReads = true; document.querySelector(".check-link").click()')
+  await until('document.body.innerText.includes("无法读取连接状态") && !document.querySelector(".check-link").disabled')
+  await run(`window.failReads = false; window.sessions = Object.fromEntries(['portal', 'sis', 'moodle'].map(site => [site, { state: 'disconnected', revision: 6 }])); window.authChanged({ state: 'signed_out', configured: false, sessions: window.sessions })`)
+  await until('document.querySelector(".account-form") !== null')
+  console.log('PASS dashboard UI: stale-response protection, missed-event recovery, MFA banner recovery, status/data separation, IPC failure recovery, sign-out')
   app.exit(0)
 }).catch(error => { console.error(error); app.exit(1) })
