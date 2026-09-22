@@ -45,4 +45,12 @@ const text = `MyHKU · 用户协议、隐私说明与免责声明\n协议版本�
 await write('public/legal/agreements.txt', text + '\n')
 // NSIS detects UTF-8 via BOM; DMG consumes the UTF-8 source explicitly.
 await write('build/license.txt', '\uFEFF' + text + '\n')
+// DMG's localized TEXT resource uses legacy GB2312. ASCII RTF with Unicode
+// escapes preserves the complete Chinese agreement and punctuation instead.
+let rtf = ''
+for (let index = 0; index < text.length; index++) {
+  const char = text[index], code = text.charCodeAt(index)
+  rtf += char === '\n' ? '\\par\n' : /[\\{}]/.test(char) ? `\\${char}` : code > 127 ? `\\u${code > 32767 ? code - 65536 : code}?` : char
+}
+await write('build/agreement.rtf', `{\\rtf1\\ansi\\ansicpg1252\\uc1\\deff0{\\fonttbl{\\f0 Helvetica;}}\\f0\\fs24\n${rtf}\n}`)
 console.log('Generated Windows, macOS, Android, web and extension branding and installation agreements.')

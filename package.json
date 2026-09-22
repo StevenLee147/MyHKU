@@ -120,7 +120,7 @@
       "sign": false,
       "writeUpdateInfo": false,
       "license": {
-        "zh_CN": "public/legal/agreements.txt"
+        "zh_CN": "build/agreement.rtf"
       }
     }
   },
