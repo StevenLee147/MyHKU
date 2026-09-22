@@ -5,6 +5,7 @@ interface Window {
     platform?: string
     version?: string
     refreshHku?: () => Promise<number>
+    downloadResource?: (url: string) => Promise<number>
     authSessions?: () => Promise<DesktopSessions>
     loginSite?: (site: 'portal' | 'sis' | 'moodle') => Promise<DesktopSessions>
     accountStatus?: () => Promise<{ configured: boolean; localUsername?: string; email?: string; authState?: string; detail?: string; sessions?: DesktopSessions }>

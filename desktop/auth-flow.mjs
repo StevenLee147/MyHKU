@@ -1,6 +1,6 @@
 export const SERVICE_URLS = {
   portal: 'https://studentportal.hku.hk/',
-  sis: 'https://sis-main.hku.hk/psp/sisprod/EMPLOYEE/PSFT_CS/c/SA_LEARNER_SERVICES.SSR_SSENRL_SCHD_W.GBL?pslnkid=Z_HC_SSR_SSENRL_SCHD_W_LNK',
+  sis: 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable',
   moodle: 'https://moodle.hku.hk/my/',
 }
 
@@ -138,7 +138,7 @@ export function inspectAuthPage(credentials = null, act = false, targetSite = nu
     })
   const guest = host === 'moodle.hku.hk' && documents.some(doc => doc.body?.classList.contains('notloggedin'))
   const moodle = host === 'moodle.hku.hk' && nodes('.usermenu .userbutton,[data-region="myoverview"]').some(visible)
-  const sis = /^(?:sis-main|sweb|intraweb)\.hku\.hk$/.test(host) && nodes('[name="DERIVED_CLASS_S_SSR_NEXT_WEEK"],[name="DERIVED_CLASS_S_SSR_PREV_WEEK"],#WEEKLY_SCHED_HTMLAREA,table[summary*="Weekly Schedule"],.bkgCalViewWDHeader,.bkgCalViewwdheader').some(visible)
+  const sis = /^(?:sis-main|sweb|intraweb)\.hku\.hk$/.test(host) && (nodes('[name="DERIVED_CLASS_S_SSR_NEXT_WEEK"],[name="DERIVED_CLASS_S_SSR_PREV_WEEK"],#WEEKLY_SCHED_HTMLAREA,table[summary*="Weekly Schedule"],.bkgCalViewWDHeader,.bkgCalViewwdheader').some(visible) || (host === 'sweb.hku.hk' && /\/MyWeekly\/showTimetable/.test(location.pathname) && /Week\s+of\s+\d{1,2}\/\d{1,2}\/\d{4}/i.test(text)))
   const sisShell = host === 'sis-main.hku.hk' && nodes('#pthdr2signout').some(node => /^(?:Sign Out|退出|登出|注销)$/i.test(node.textContent.trim()))
   if (service && !password && !guest && (logout || moodle || sis || sisShell)) {
     if (host === 'studentportal.hku.hk' && targetSite === 'sis') {

@@ -32,6 +32,14 @@
     return ''
   }
   const idFrom = (node, href, prefix, seed) => {
+    // Activity ids must agree between course cards and overview table rows.
+    if (href && ['assignment', 'resource', 'course'].includes(prefix)) {
+      try {
+        const url = new URL(href, location.href)
+        const id = url.searchParams.get('id')
+        if (id) return id
+      } catch (_) { /* use the DOM identity below */ }
+    }
     const direct = attr(node, ['data-id', 'data-course-id', 'data-event-id', 'data-assignment-id', 'id'])
     if (direct) return direct.replace(/^course-/, '')
     try {
@@ -54,22 +62,37 @@
   }
   const nearest = (node) => node.closest('tr, article, li, .coursebox, .course-listitem, .course-card, .activity, .activity-item, .event-list-item, [data-region="event-item"]') || node
   const codeFrom = (value) => (clean(value).match(/\b[A-Z]{2,8}\s?-?\d{3,5}[A-Z]?\b/i) || [])[0]?.replace(/\s+/g, '').toUpperCase() || ''
+  const tableField = (root, pattern) => {
+    const row = root.closest('tr')
+    const table = row?.closest('table')
+    if (!table) return null
+    const headers = Array.from(table.querySelectorAll('thead tr:last-child th, thead tr:last-child td'))
+    const cells = headers.length ? headers : Array.from(table.rows[0]?.cells || [])
+    const index = cells.findIndex(cell => pattern.test(clean(cell.textContent)))
+    return index < 0 ? null : row.cells[index]
+  }
+  const submissionStatus = root => clean(tableField(root, /submission status|提交狀態|提交状态/i)?.textContent || root.querySelector('.submissionstatus, [data-region="submission-status"]')?.textContent, 160)
   const parseDue = (root) => {
     const node = root.querySelector('time[datetime], [data-due-date], .duedate, .due-date, .event-time, time')
-    const raw = clean(node && (node.getAttribute('datetime') || node.getAttribute('data-due-date') || node.textContent), 120)
+    const raw = clean(node ? (node.getAttribute('datetime') || node.getAttribute('data-due-date') || node.textContent) : tableField(root, /due date|截止|到期/i)?.textContent, 120)
     if (!raw) return undefined
     const number = Number(raw)
     if (Number.isFinite(number) && number > 1000000000) return new Date(number < 100000000000 ? number * 1000 : number).toISOString()
-    const parsed = Date.parse(raw.replace(/^due\s*:?\s*/i, ''))
-    return Number.isNaN(parsed) ? raw : new Date(parsed).toISOString()
+    // Moodle overview omits the year and uses the site's timezone. Preserve
+    // its displayed date instead of Date.parse silently assigning year 2001.
+    return raw
   }
   const completed = (root) => {
+    const status = submissionStatus(root)
+    if (/no submission|not submitted|draft|未提交|尚未提交|草稿/i.test(status)) return false
+    if (/submitted for grading|submitted|已提交/i.test(status)) return true
+    if (status) return undefined
     const state = attr(root, ['data-completionstate', 'data-completed', 'data-state'])
     if (/^(1|true|complete|completed|done|submitted)$/i.test(state)) return true
     if (/^(0|false|incomplete|pending|todo)$/i.test(state)) return false
     const value = clean(root.textContent).toLowerCase()
-    if (/completed|submitted|已完成|已提交/.test(value)) return true
-    if (/not completed|incomplete|未完成|待完成/.test(value)) return false
+    if (/not completed|not submitted|no submission|incomplete|未完成|未提交|待完成/.test(value)) return false
+    if (/\bcompleted\b|\bsubmitted\b|已完成|已提交/.test(value)) return true
     return undefined
   }
 
@@ -94,7 +117,7 @@
       if (assignmentIds.has(id)) return
       assignmentIds.add(id); const course = attr(root, ['data-course-name']) || text(root, ['.event-course', '.course-name', '.coursename']) || '未提供课程'
       const done = completed(root); const due = parseDue(root)
-      assignments.push({ id, title, course, ...(due ? { due } : {}), ...(done === undefined ? {} : { completed: done }) })
+      assignments.push({ id, title, course, ...(due ? { due } : {}), ...(submissionStatus(root) ? { submissionStatus: submissionStatus(root) } : {}), ...(done === undefined ? {} : { completed: done }) })
     })
 
     const announcements = []; const announcementIds = new Set()
@@ -150,6 +173,10 @@
   async function crawlMoodleCoursePages(baseData) {
     const links = Array.from(document.querySelectorAll('a[href*="/course/view.php"]'))
       .map(link => pageHref(link, location.href)).filter(Boolean)
+    const current = new URL(location.href)
+    if (/\/course\/(view|overview)\.php$/.test(current.pathname) && current.searchParams.has('id')) {
+      links.push(`${current.origin}/course/view.php?id=${encodeURIComponent(current.searchParams.get('id'))}`)
+    }
     const unique = Array.from(new Set(links)).slice(0, 20)
     const extra = { assignments: [], announcements: [], resources: [], grades: [] }
     const seen = { assignments: new Set(), announcements: new Set(), resources: new Set(), grades: new Set() }
@@ -191,13 +218,32 @@
           seen.grades.add(id); const value = (cells.slice(1).find(value => /\d+(?:\.\d+)?\s*(?:%|\/\s*\d+)?/.test(value)) || '').slice(0, 80)
           extra.grades.push({ id, title, course: heading, ...(value ? { value } : {}), released: true })
         })
+        // Moodle 5 puts due dates and submission states in the course overview,
+        // not in the course's activity cards. Match rows by the activity URL id.
+        const courseId = new URL(courseUrl).searchParams.get('id')
+        const overviewUrl = new URL(`/course/overview.php?id=${encodeURIComponent(courseId)}`, courseUrl).href
+        const overviewResponse = await fetch(overviewUrl, { credentials: 'include' })
+        if (overviewResponse.ok) {
+          const overview = new DOMParser().parseFromString(await overviewResponse.text(), 'text/html')
+          overview.querySelectorAll('a[href*="/mod/assign/view.php"]').forEach(link => {
+            const root = nearest(link); const href = pageHref(link, overviewUrl)
+            const title = clean(link.textContent)
+            if (!href || !title) return
+            const id = idFrom(root, href, 'assignment', title)
+            const due = parseDue(root); const status = submissionStatus(root); const done = completed(root)
+            const item = { id, title, course: heading, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) }
+            const index = extra.assignments.findIndex(item => item.id === id)
+            if (index < 0) extra.assignments.push(item)
+            else extra.assignments[index] = item
+          })
+        }
       } catch (_) { /* one unavailable course must not hide the others */ }
     }))
     return {
       courses: baseData.courses,
-      assignments: [...baseData.assignments, ...extra.assignments],
+      assignments: Array.from(new Map([...baseData.assignments, ...extra.assignments].map(item => [item.id, item])).values()),
       announcements: [...baseData.announcements, ...extra.announcements],
-      resources: [...baseData.resources, ...extra.resources],
+      resources: Array.from(new Map([...baseData.resources, ...extra.resources].map(item => [item.id, item])).values()),
       grades: [...baseData.grades, ...extra.grades],
     }
   }
@@ -207,8 +253,8 @@
     return { start: (matches[0] || '').replace('：', ':'), end: (matches[1] || '').replace('：', ':') }
   }
 
-  function extractWeekRange() {
-    const raw = String(document.body?.textContent || document.documentElement?.textContent || '')
+  function extractWeekRange(rootDocument = document) {
+    const raw = String(rootDocument.body?.textContent || rootDocument.documentElement?.textContent || '')
     const match = raw.match(/Week\s+of\s+(\d{1,2})\/(\d{1,2})\/(\d{4})\s*[-–]\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i)
     if (!match) return undefined
     const iso = (day, month, year) => `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -219,55 +265,72 @@
     if (!rootDocument || seenDocuments.has(rootDocument)) return []
     seenDocuments.add(rootDocument)
     const schedule = []
-    const weeklyTables = []
-    const directWeekly = rootDocument.querySelector('#WEEKLY_SCHED_HTMLAREA, table[summary*="Weekly Schedule"]')
-    if (directWeekly) weeklyTables.push(directWeekly)
-    rootDocument.querySelectorAll('iframe').forEach((frame) => {
-      try {
-        const nested = frame.contentDocument?.querySelector('#WEEKLY_SCHED_HTMLAREA, table[summary*="Weekly Schedule"]')
-        if (nested) weeklyTables.push(nested)
-      } catch (_) { /* cross-origin or unloaded frame */ }
-    })
-    weeklyTables.forEach((table) => {
-      const headers = Array.from(table.rows[0]?.cells || []).map((cell) => clean(cell.textContent))
-      const seen = new Set()
-      Array.from(table.querySelectorAll('td')).forEach((cell, index) => {
-        const raw = String(cell.textContent || '').replace(/\u00a0/g, ' ')
-        const times = raw.match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/)
-        if (!times || seen.has(cell)) return
-        seen.add(cell)
-        const course = raw.match(/\b[A-Z]{2,8}\s*\d{3,5}\s*-\s*[A-Z0-9]+\b/i)?.[0] || raw.split(/--|\d{1,2}:\d{2}/)[0].trim()
-        const room = raw.match(/\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*(.+)$/i)?.[1]?.trim() || ''
-        const day = headers[cell.cellIndex] || ''
-        schedule.push({ id: `weekly-${index}-${times[1]}-${times[2]}`, title: clean(course), ...(codeFrom(course) ? { code: codeFrom(course) } : {}), ...(day ? { day } : {}), start: times[1], end: times[2], ...(room ? { room: clean(room) } : {}) })
+    const week = extractWeekRange(rootDocument)
+    const weekday = value => {
+      const raw = clean(value).toLowerCase()
+      const english = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].findIndex(day => new RegExp(`\\b${day}(?:day|sday|nesday|rsday|urday)?\\b`).test(raw))
+      if (english >= 0) return english
+      return ['日', '一', '二', '三', '四', '五', '六'].findIndex(day => raw.includes(`星期${day}`) || raw.includes(`周${day}`))
+    }
+    const dated = day => {
+      const match = clean(day).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+      if (match) return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`
+      const index = weekday(day)
+      if (!week || index < 0) return undefined
+      const date = new Date(`${week.start}T00:00:00Z`)
+      date.setUTCDate(date.getUTCDate() + (index - date.getUTCDay() + 7) % 7)
+      return date.toISOString().slice(0, 10)
+    }
+    const add = (node, day) => {
+      const raw = String(node.innerHTML || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ')
+      const times = raw.match(/(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})/)
+      if (!times) return
+      const title = clean(raw.slice(0, times.index)).replace(/\s*--\s*$/, '')
+      if (!codeFrom(title)) return
+      const room = clean(raw.slice(times.index + times[0].length)).replace(/^--$/, '')
+      const date = dated(day)
+      const id = `meeting-${date || day}-${title}-${times[1]}-${times[2]}`
+      if (!schedule.some(item => item.id === id)) schedule.push({ id, title, code: codeFrom(title), day, ...(date ? { date } : {}), start: times[1], end: times[2], ...(room ? { room } : {}) })
+    }
+    // cellIndex ignores earlier rowspans. Reconstruct the logical grid first.
+    rootDocument.querySelectorAll('table').forEach(table => {
+      const matrix = []; const origins = []
+      Array.from(table.rows).forEach((row, r) => {
+        matrix[r] ||= []
+        let c = 0
+        Array.from(row.cells).forEach(cell => {
+          while (matrix[r][c]) c++
+          const height = cell.rowSpan === 0 ? table.rows.length - r : cell.rowSpan || 1
+          for (let y = r; y < r + height; y++) {
+            matrix[y] ||= []
+            for (let x = c; x < c + (cell.colSpan || 1); x++) matrix[y][x] = cell
+          }
+          origins.push({ cell, r, c }); c += cell.colSpan || 1
+        })
       })
+      const headerRow = matrix.findIndex(row => row.filter(cell => weekday(cell?.textContent) >= 0).length >= 5)
+      if (headerRow < 0) return
+      const headers = matrix[headerRow].map(cell => clean(cell?.textContent))
+      for (const { cell, r, c } of origins) if (r > headerRow && weekday(headers[c]) >= 0) add(cell, headers[c])
     })
+    if (!schedule.length) {
+      const headers = Array.from(rootDocument.querySelectorAll('.bkgCalViewWDHeader, .bkgCalViewwdheader'))
+      const position = node => {
+        const match = (node.getAttribute('style') || '').match(/left\s*:\s*([\d.]+)(%|px)/i)
+        return match ? { value: Number(match[1]), unit: match[2] } : null
+      }
+      rootDocument.querySelectorAll('[class*="bkgCalViewItem"]').forEach(node => {
+        const pos = position(node)
+        const matching = headers.filter(header => position(header)?.unit === pos?.unit)
+        let header = pos && matching.length ? matching.reduce((best, item) => Math.abs(position(item).value - pos.value) < Math.abs(position(best).value - pos.value) ? item : best) : null
+        if (!header) {
+          const rect = node.getBoundingClientRect()
+          if (rect.width) header = headers.find(item => { const h = item.getBoundingClientRect(); return h.width && rect.left >= h.left - 2 && rect.left < h.right })
+        }
+        add(node, clean(header?.textContent))
+      })
+    }
     if (schedule.length) return schedule
-    const hasDirectSchedule = rootDocument.querySelector('[class*="bkgCalViewItem"], #WEEKLY_SCHED_HTMLAREA, table[summary*="Weekly Schedule"]')
-    if (!hasDirectSchedule) {
-      rootDocument.querySelectorAll('iframe').forEach((frame) => {
-        try {
-          for (const item of extractSis(frame.contentDocument, seenDocuments)) if (!schedule.some((entry) => entry.id === item.id)) schedule.push(item)
-        } catch (_) { /* cross-origin or unloaded frame */ }
-      })
-      return schedule
-    }
-    // Fast path for the legacy absolute-position timetable. Keep this at the
-    // top because the page has no semantic table cells for its course blocks.
-    const legacyItems = rootDocument.querySelectorAll('[class*="bkgCalViewItem"]')
-    if (legacyItems.length) {
-      const days = Array.from(rootDocument.querySelectorAll('.bkgCalViewWDHeader, .bkgCalViewwdheader')).map((node) => clean(node.textContent))
-      Array.from(legacyItems).forEach((node, index) => {
-        const raw = String(node.innerHTML || node.textContent || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ')
-        const times = raw.match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/)
-        if (!times) return
-        const courseMatch = raw.match(/\b[A-Z]{2,8}\s*\d{3,5}\s*-\s*[A-Z0-9]+\b/i); const title = clean(courseMatch?.[0] || raw.split(/\r?\n+/)[0] || '未提供课程'); const roomMatch = raw.match(/\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*([A-Z][A-Z0-9.-]*)/i); const room = clean(roomMatch?.[1] || '')
-        const style = String(node.getAttribute('style') || ''); const left = Number(style.match(/left\s*:\s*([\d.]+)/i)?.[1]); const day = days[Number.isFinite(left) ? Math.round(left / 10) : -1] || ''
-        const code = codeFrom(title) || undefined; const id = `legacy-${index}-${times[1]}-${times[2]}`
-        schedule.push({ id, title, ...(code ? { code } : {}), ...(day ? { day } : {}), start: times[1], end: times[2], ...(room ? { room } : {}) })
-      })
-      return schedule
-    }
     rootDocument.querySelectorAll('table').forEach((table) => {
       const rows = Array.from(table.querySelectorAll('tbody tr, tr'))
       // PeopleSoft tables often use a <th> header row without <thead>.
@@ -301,69 +364,6 @@
         const id = idFrom(row, linkHref(row.querySelector('a')), 'class', title + pair.start + pair.end + index)
         if (!schedule.some((entry) => entry.id === id)) schedule.push({ id, title: title.replace(code, '').trim() || title, ...(code ? { code } : {}), ...(date ? { date } : {}), ...(day ? { day } : {}), start: pair.start, end: pair.end, ...(room ? { room } : {}), ...(teacher ? { teacher } : {}) })
       })
-    })
-    // PeopleSoft's weekly calendar is rendered inside a same-origin iframe
-    // and uses a sparse grid with rowspans. Build a logical matrix so each
-    // populated day cell gets its own course entry.
-    const weekly = rootDocument.querySelector('#WEEKLY_SCHED_HTMLAREA, table[summary*="Weekly Schedule"]')
-    if (weekly) {
-      const matrix = []
-      const cells = []
-      Array.from(weekly.rows).forEach((row, rowIndex) => {
-        if (!matrix[rowIndex]) matrix[rowIndex] = []
-        let column = 0
-        Array.from(row.cells).forEach((cell) => {
-          while (matrix[rowIndex][column]) column += 1
-          const rowSpan = Math.max(1, Number(cell.rowSpan) || 1)
-          const colSpan = Math.max(1, Number(cell.colSpan) || 1)
-          for (let r = rowIndex; r < rowIndex + rowSpan; r += 1) {
-            if (!matrix[r]) matrix[r] = []
-            for (let c = column; c < column + colSpan; c += 1) matrix[r][c] = cell
-          }
-          cells.push({ cell, rowIndex, column })
-          column += colSpan
-        })
-      })
-      const headers = (matrix[0] || []).map((cell) => clean(cell?.textContent))
-      const seenCells = new Set()
-      for (let rowIndex = 1; rowIndex < matrix.length; rowIndex += 1) {
-        const startCell = matrix[rowIndex]?.[0]
-        const rowStart = clean(startCell?.textContent).match(/\b\d{1,2}:\d{2}\b/)?.[0] || ''
-        for (let column = 1; column < (matrix[rowIndex] || []).length; column += 1) {
-          const cell = matrix[rowIndex][column]
-          if (!cell || seenCells.has(cell)) continue
-          seenCells.add(cell)
-          const value = String(cell.textContent || '').replace(/\u00a0/g, ' ').trim()
-          if (!value || !/\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}/.test(value)) continue
-          const times = value.match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/)
-          if (!times) continue
-          const lines = value.split(/\r?\n+/).map(clean).filter(Boolean)
-          const title = lines[0] || '未提供课程'
-          const room = lines[lines.length - 1] && !/^\d{1,2}:\d{2}\s*-/.test(lines[lines.length - 1]) && lines[lines.length - 1] !== '--' ? lines[lines.length - 1] : ''
-          const header = headers[column] || ''
-          const code = codeFrom(title) || undefined
-          const id = idFrom(cell, '', 'class', `${header}|${title}|${times[1]}|${times[2]}`)
-          if (!schedule.some((entry) => entry.id === id)) schedule.push({ id, title, ...(code ? { code } : {}), ...(header ? { day: header } : {}), start: times[1], end: times[2], ...(room ? { room } : {}) })
-        }
-      }
-    }
-    // The legacy My Timetable page uses absolutely positioned course blocks
-    // instead of table cells. Their text contains the authoritative course,
-    // time range and room; the `left` style maps directly to the weekday.
-    const dayHeaders = Array.from(rootDocument.querySelectorAll('.bkgCalViewWDHeader, .bkgCalViewwdheader')).map((node) => clean(node.textContent))
-    rootDocument.querySelectorAll('[class*="bkgCalViewItem"]').forEach((node, index) => {
-      const lines = String(node.innerText || node.textContent || '').replace(/\u00a0/g, ' ').split(/\r?\n+/).map(clean).filter(Boolean)
-      const times = (lines.join(' ').match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/) || [])
-      if (!times[1] || !times[2]) return
-      const title = lines[0] || '未提供课程'
-      const room = lines.find((line) => line !== title && !/^\d{1,2}:\d{2}\s*-/.test(line)) || ''
-      const style = attr(node, ['style'])
-      const left = Number(style.match(/(?:^|;)\s*left\s*:\s*([\d.]+)/i)?.[1])
-      const dayIndex = Number.isFinite(left) ? Math.round(left / 10) : -1
-      const day = dayHeaders[dayIndex] || ''
-      const code = codeFrom(title) || undefined
-      const id = `class-${day}-${title}-${times[1]}-${times[2]}-${room}-${index}`.replace(/[^a-z0-9_-]+/gi, '-').slice(0, 180)
-      if (!schedule.some((entry) => entry.id === id)) schedule.push({ id, title, ...(code ? { code } : {}), ...(day ? { day } : {}), start: times[1], end: times[2], ...(room ? { room } : {}) })
     })
     // The top PeopleSoft shell contains the actual timetable in a same-origin
     // iframe. Inspect loaded iframe documents without reading any credentials.
@@ -448,7 +448,7 @@
         : { schedule: await crawlPortalSchedule(extractSis()) }
     if (site === 'sis') data.scheduleWeek = extractWeekRange()
     const fields = Object.fromEntries(Object.entries(data).filter(([key, value]) => Array.isArray(value) || (key === 'scheduleWeek' && value && typeof value === 'object')))
-    if (site === 'sis' && Array.isArray(fields.schedule) && fields.schedule.length > 0) fields.replaceFields = ['schedule']
+    if (site === 'sis' && Array.isArray(fields.schedule) && (fields.schedule.length > 0 || fields.scheduleWeek)) fields.replaceFields = ['schedule']
     // Include a page marker so the bridge can report the current session even
     // when a valid page contains no rows (for example an empty course list).
     fields.detail = clean(document.title, 240) || location.pathname

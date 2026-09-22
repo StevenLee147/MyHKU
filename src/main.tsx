@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useMemo, useRef, useState, type FormEvent } from
 import { createRoot } from 'react-dom/client'
 import { Bell, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Clock3, Download, ExternalLink, FileText, LayoutDashboard, Link2, LogIn, Menu, RefreshCw, Search, Settings, ShieldCheck, Sparkles, Trophy, X, CircleAlert } from 'lucide-react'
 import './styles.css'
+import { hongKongDate, scheduleDate, todayClasses } from './services/schedule'
 import { applyDesktopSessions, cacheSnapshot, checkAllConnections, checkConnection, fetchLiveSnapshot, getCachedSnapshot, getConnectionStates, getDataMode, HKU_SITES, notifySnapshotChanges, openOfficialLogin, safeHkuUrl, setDataMode, type ConnectionState, type DataMode, type HkuSite, type LiveSnapshot, type SiteConnection } from './services/hku'
 
 type ConnectionPhase = 'checking' | 'connected' | 'manual' | 'disconnected'
@@ -213,7 +214,7 @@ function App() {
   const connectionPhase: ConnectionPhase = Object.values(connections).some(item => item.state === 'login_pending') ? 'manual' : Object.values(connections).some(item => item.state === 'checking') ? 'checking' : connectedCount > 0 ? 'connected' : 'disconnected'
   const accountLabel = dataMode === 'demo' ? '演示数据' : connectedCount === 3 ? '已安全连接' : connectedCount ? `${connectedCount}/3 个服务已连接` : '需要连接 HKU'
   const now = new Date()
-  const today = { weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'long' }).format(now), date: `${now.getMonth() + 1} 月 ${now.getDate()} 日` }
+  const today = { weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(now), date: new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', timeZone: 'Asia/Hong_Kong' }).format(now) }
   const filteredDue = useMemo(() => dueItems.filter(i => `${i.title}${i.course}`.toLowerCase().includes(query.toLowerCase())), [query])
   if (!authReady) return <div className="account-gate"><div className="account-loading"><RefreshCw size={22} className="spin"/> 正在准备 MyHKU…</div></div>
   if (!accountConfigured) return <AccountSetup onReady={next => { setAccount(next); setAccountConfigured(true) }} />
@@ -259,19 +260,6 @@ function formatWeekRange(week?: LiveSnapshot['scheduleWeek']): string {
   const fmt = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' })
   return `${fmt.format(start)} – ${fmt.format(end)}`
 }
-function isTodaySchedule(item: LiveSnapshot['schedule'][number]): boolean {
-  const raw = (item.date || item.day || '').trim()
-  if (!raw) return false
-  const parsed = Date.parse(raw)
-  const now = new Date()
-  if (!Number.isNaN(parsed)) {
-    const value = new Date(parsed)
-    return value.getFullYear() === now.getFullYear() && value.getMonth() === now.getMonth() && value.getDate() === now.getDate()
-  }
-  const weekday = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()]
-  return raw.includes(`星期${weekday}`) || raw.includes(`周${weekday}`) || raw.toLowerCase().includes(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][now.getDay()])
-}
-
 function addDays(value: Date, count: number): Date {
   const next = new Date(value)
   next.setDate(next.getDate() + count)
@@ -283,6 +271,7 @@ function calendarWeekStart(snapshot: LiveSnapshot): Date {
   const parsed = raw ? new Date(`${raw.slice(0, 10)}T00:00:00`) : new Date()
   const value = Number.isNaN(parsed.getTime()) ? new Date() : parsed
   value.setHours(0, 0, 0, 0)
+  if (!snapshot.scheduleWeek) value.setDate(value.getDate() - (value.getDay() + 6) % 7)
   return value
 }
 
@@ -320,7 +309,8 @@ function CalendarPage({ snapshot, onRefresh }: { snapshot: LiveSnapshot; onRefre
   const events = days.map(() => [] as Array<{ item: LiveSnapshot['schedule'][number]; start: number; end: number }>)
   const unplaced: LiveSnapshot['schedule'] = []
   snapshot.schedule.forEach(item => {
-    const day = scheduleDayIndex(item, weekStart)
+    const date = scheduleDate(item, snapshot.scheduleWeek)
+    const day = scheduleDayIndex(date ? { ...item, date } : item, weekStart)
     const start = parseClockMinutes(item.start); const parsedEnd = parseClockMinutes(item.end)
     if (day < 0 || day > 6 || start === null) { unplaced.push(item); return }
     const end = parsedEnd || start + 60
@@ -335,8 +325,11 @@ function CalendarPage({ snapshot, onRefresh }: { snapshot: LiveSnapshot; onRefre
     finally { setLoadingWeek(null) }
   }
   const formatDay = (day: Date) => new Intl.DateTimeFormat('zh-CN', { weekday: 'short', month: 'numeric', day: 'numeric' }).format(day)
-  const timeLabels = Array.from({ length: 11 }, (_, index) => 9 + index)
-  const gridStart = 9 * 60; const pixelsPerHour = 60
+  const allEvents = events.flat()
+  const firstHour = Math.min(8, ...allEvents.map(event => Math.floor(event.start / 60)))
+  const lastHour = Math.max(19, ...allEvents.map(event => Math.ceil(event.end / 60)))
+  const timeLabels = Array.from({ length: lastHour - firstHour + 1 }, (_, index) => firstHour + index)
+  const gridStart = firstHour * 60; const pixelsPerHour = 120
   return <section className="panel live-page">
     <div className="panel-head">
       <div><h2>我的课表</h2><p>周视图 · {formatWeekRange(snapshot.scheduleWeek)} · {snapshot.schedule.length} 节课程</p></div>
@@ -349,20 +342,61 @@ function CalendarPage({ snapshot, onRefresh }: { snapshot: LiveSnapshot; onRefre
     </div>
     {loadingWeek !== null && <p className="empty-state">正在加载{loadingWeek < 0 ? '上' : loadingWeek > 0 ? '下' : '本'}周课表…</p>}
     {loadingWeek === null && <>
-      <div className="schedule-board" style={{ '--hour-height': `${pixelsPerHour}px` } as React.CSSProperties}>
+      <div className="schedule-scroll"><div className="schedule-board" style={{ '--hour-height': `${pixelsPerHour}px`, '--grid-hours': lastHour - firstHour } as React.CSSProperties}>
         <div className="schedule-corner" />
-        {days.map(day => <div className="schedule-day-head" key={day.toISOString()}>{formatDay(day)}{day.toDateString() === new Date().toDateString() ? <small>今天</small> : null}</div>)}
-        <div className="schedule-time-axis">{timeLabels.map(hour => <span key={hour} style={{ top: `${(hour - 9) * pixelsPerHour - 8}px` }}>{`${String(hour).padStart(2, '0')}:00`}</span>)}</div>
+        {days.map(day => <div className="schedule-day-head" key={day.toISOString()}>{formatDay(day)}{`${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}` === hongKongDate() ? <small>今天</small> : null}</div>)}
+        <div className="schedule-time-axis">{timeLabels.map(hour => <span key={hour} style={{ top: `${(hour - firstHour) * pixelsPerHour - 8}px` }}>{`${String(hour).padStart(2, '0')}:00`}</span>)}</div>
         {events.map((dayEvents, dayIndex) => <div className="schedule-day-track" key={days[dayIndex].toISOString()} style={{ gridColumn: dayIndex + 2 }}>
-          {timeLabels.slice(0, -1).map(hour => <i className="schedule-hour-line" key={hour} style={{ top: `${(hour - 9) * pixelsPerHour}px` }} />)}
-          {dayEvents.map(({ item, start, end }, index) => <article className="schedule-event" key={item.id || `${item.title}-${index}`} style={{ top: `${Math.max(0, start - gridStart) / 60 * pixelsPerHour + 2}px`, height: `${Math.max(28, (Math.min(19 * 60, end) - Math.max(gridStart, start)) / 60 * pixelsPerHour - 4)}px` }} title={`${item.title} · ${item.teacher || ''} · ${item.room || ''}`}>
-            <strong>{item.title}</strong><small>{item.start}–{item.end}{item.room ? ` · ${item.room}` : ''}</small>
+          {timeLabels.slice(0, -1).map(hour => <i className="schedule-hour-line" key={hour} style={{ top: `${(hour - firstHour) * pixelsPerHour}px` }} />)}
+          {dayEvents.map(({ item, start, end }, index) => <article className="schedule-event" key={item.id || `${item.title}-${index}`} style={{ top: `${Math.max(0, start - gridStart) / 60 * pixelsPerHour + 2}px`, height: `${Math.max(28, (Math.min(lastHour * 60, end) - Math.max(gridStart, start)) / 60 * pixelsPerHour - 4)}px` }} title={`${item.title} · ${item.teacher || ''} · ${item.room || ''}`}>
+            <strong>{item.title}</strong><small>{item.start}–{item.end}</small><small>{item.room || '未提供地点'}</small>
           </article>)}
         </div>)}
+      </div>
       </div>
       {unplaced.length > 0 && <p className="empty-state schedule-unplaced">{unplaced.length} 节课程缺少可定位的日期或时间</p>}
       {snapshot.schedule.length === 0 && <p className="empty-state">本周没有课表记录</p>}
     </>}
+  </section>
+}
+function MaterialsPage({ snapshot, onRefresh }: { snapshot: LiveSnapshot; onRefresh: () => void }) {
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const [message, setMessage] = useState('')
+  const groups = new Map<string, LiveSnapshot['resources']>()
+  snapshot.resources.forEach(item => groups.set(item.course, [...(groups.get(item.course) || []), item]))
+  const download = async (id: string, url: string) => {
+    setDownloading(id); setMessage('')
+    try {
+      if (window.myhkuDesktop?.downloadResource) {
+        const count = await window.myhkuDesktop.downloadResource(url)
+        setMessage(`已下载 ${count} 个文件到下载文件夹`)
+      } else {
+        const target = new URL(url)
+        if (target.pathname === '/mod/resource/view.php') target.searchParams.set('redirect', '1')
+        target.searchParams.set('forcedownload', '1')
+        const frame = document.createElement('iframe')
+        frame.hidden = true; frame.src = target.href
+        document.body.appendChild(frame)
+        setTimeout(() => frame.remove(), 60_000)
+        setMessage('已请求下载；若未开始，请使用桌面端并确认 Moodle 已连接')
+      }
+    } catch (error) { setMessage(error instanceof Error ? error.message : '下载失败，请重试') }
+    finally { setDownloading(null) }
+  }
+  return <section className="panel live-page">
+    <div className="panel-head"><div><h2>课程资料</h2><p>按课程分栏 · 文件直接下载</p></div><button className="text-btn" onClick={onRefresh}><RefreshCw size={13}/>刷新</button></div>
+    {message && <p className="download-message" role="status">{message}</p>}
+    <div className="resource-columns">{Array.from(groups, ([course, items]) => <section className="resource-course" key={course}>
+      <h3>{course}<small>{items.length} 项资料</small></h3>
+      {items.map(item => {
+        const url = safeHkuUrl(item.url)
+        const file = url && /\/(?:mod\/(?:resource|folder)\/|pluginfile\.php\/)/.test(new URL(url).pathname)
+        return <div className="resource-row" key={item.id}><FileText size={16}/><span><strong>{item.title}</strong></span>
+          {url ? file ? <button disabled={downloading !== null} onClick={() => download(item.id, url)}><Download size={14}/>{downloading === item.id ? '下载中…' : '下载'}</button> : <a href={url} target="_blank" rel="noreferrer"><ExternalLink size={14}/>查看</a> : <em>无链接</em>}
+        </div>
+      })}
+    </section>)}</div>
+    {!groups.size && <p className="empty-state">暂无可下载资料</p>}
   </section>
 }
 function LiveDataPage({ active, snapshot, error, connectionPhase, onOpenSettings, onRefresh }: { active: NavKey; snapshot: LiveSnapshot | null; error: string; connectionPhase: ConnectionPhase; onOpenSettings: () => void; onRefresh: () => void }) {
@@ -371,8 +405,8 @@ function LiveDataPage({ active, snapshot, error, connectionPhase, onOpenSettings
   if (active === 'calendar') {
     return <CalendarPage snapshot={snapshot} onRefresh={onRefresh}/>
   }
-  if (active === 'moodle') return <section className="panel live-page"><div className="panel-head"><div><h2>Moodle</h2><p>{snapshot.courses.length} 门课程 · {snapshot.assignments.filter(item => !item.completed).length} 项待办 · {snapshot.grades.length} 项成绩</p></div><button className="text-btn" onClick={onRefresh}><RefreshCw size={13}/>刷新</button></div><div className="live-columns"><div><h3 className="subheading">课程</h3>{snapshot.courses.length ? snapshot.courses.map(item => <div className="live-row" key={item.id}><BookOpen size={15}/><span>{item.title}{item.code ? ` · ${item.code}` : ''}</span></div>) : <p className="empty-state">暂无课程</p>}</div><div><h3 className="subheading">待办</h3>{snapshot.assignments.length ? snapshot.assignments.map(item => <div className="live-row" key={item.id}><span className={`due-check ${item.completed ? 'done' : ''}`}>{item.completed ? '✓' : ''}</span><span>{item.title}<small>{item.course}{item.due ? ` · ${item.due}` : ''}</small></span></div>) : <p className="empty-state">暂无待办</p>}</div><div><h3 className="subheading">成绩</h3>{snapshot.grades.length ? snapshot.grades.map(item => <div className="live-row" key={item.id}><Trophy size={15}/><span>{item.title}<small>{item.course} · {item.released === false ? '未发布' : item.value || '未提供分数'}</small></span></div>) : <p className="empty-state">暂无可见成绩</p>}</div></div><div className="live-announcements"><h3 className="subheading">公告</h3>{snapshot.announcements.length ? snapshot.announcements.slice(0, 8).map(item => <div className="live-row" key={item.id}><Bell size={15}/><span>{item.url ? <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> : item.title}<small>{item.course}{item.published ? ` · ${item.published}` : ''}</small></span></div>) : <p className="empty-state">暂无公告</p>}</div></section>
-  return <section className="panel live-page"><div className="panel-head"><div><h2>课程资料</h2><p>来自 Moodle 的真实资料 · 点击后在官方页面打开或下载</p></div><button className="text-btn" onClick={onRefresh}><RefreshCw size={13}/>刷新</button></div><div className="resource-list">{snapshot.resources.length ? snapshot.resources.map(item => { const url = safeHkuUrl(item.url); return <div className="resource-row" key={item.id}><FileText size={16}/><span><strong>{item.title}</strong><small>{item.course}</small></span>{url ? <a href={url} target="_blank" rel="noreferrer"><Download size={14}/>下载</a> : <em>无链接</em>}</div> }) : <p className="empty-state">暂无可下载资料</p>}</div></section>
+  if (active === 'moodle') return <section className="panel live-page"><div className="panel-head"><div><h2>Moodle</h2><p>{snapshot.courses.length} 门课程 · {snapshot.assignments.filter(item => !item.completed).length} 项待办 · {snapshot.grades.length} 项成绩</p></div><button className="text-btn" onClick={onRefresh}><RefreshCw size={13}/>刷新</button></div><div className="live-columns"><div><h3 className="subheading">课程</h3>{snapshot.courses.length ? snapshot.courses.map(item => <div className="live-row" key={item.id}><BookOpen size={15}/><span>{item.title}{item.code ? ` · ${item.code}` : ''}</span></div>) : <p className="empty-state">暂无课程</p>}</div><div><h3 className="subheading">待办</h3>{snapshot.assignments.length ? snapshot.assignments.map(item => <div className="live-row" key={item.id}><span className={`due-check ${item.completed ? 'done' : ''}`}>{item.completed ? '✓' : ''}</span><span>{item.title}<small>{item.course}</small><small>截止：{item.due || '未提供截止时间'}</small><small>{item.submissionStatus || (item.completed === true ? '已提交' : item.completed === false ? '未提交' : '提交状态未提供')}</small></span></div>) : <p className="empty-state">暂无待办</p>}</div><div><h3 className="subheading">成绩</h3>{snapshot.grades.length ? snapshot.grades.map(item => <div className="live-row" key={item.id}><Trophy size={15}/><span>{item.title}<small>{item.course} · {item.released === false ? '未发布' : item.value || '未提供分数'}</small></span></div>) : <p className="empty-state">暂无可见成绩</p>}</div></div><div className="live-announcements"><h3 className="subheading">公告</h3>{snapshot.announcements.length ? snapshot.announcements.slice(0, 8).map(item => <div className="live-row" key={item.id}><Bell size={15}/><span>{item.url ? <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> : item.title}<small>{item.course}{item.published ? ` · ${item.published}` : ''}</small></span></div>) : <p className="empty-state">暂无公告</p>}</div></section>
+  return <MaterialsPage snapshot={snapshot} onRefresh={onRefresh}/>
 }
 function LiveDataPlaceholder({ snapshot, error, connectionPhase, onOpenSettings, onRefresh }: { snapshot: LiveSnapshot | null; error: string; connectionPhase: ConnectionPhase; onOpenSettings: () => void; onRefresh: () => void }) {
   if (!snapshot) {
@@ -384,8 +418,9 @@ function LiveDataPlaceholder({ snapshot, error, connectionPhase, onOpenSettings,
       : error || '应用会自动恢复官方会话；可在设置中查看各服务状态。'
     return <section className="panel placeholder live-placeholder"><div className="placeholder-icon">{automatic ? <RefreshCw size={25} className="spin"/> : <ShieldCheck size={25}/>}</div><h2>{heading}</h2><p>{detail}</p><div className="placeholder-actions"><button className="outline-btn" onClick={onOpenSettings}><Link2 size={16}/>查看连接状态</button>{!automatic && <button className="outline-btn" onClick={onRefresh}><RefreshCw size={15}/>重新检查</button>}</div></section>
   }
-  const classesLive = snapshot.schedule.filter(isTodaySchedule).slice(0, 3)
-  const dueLive = snapshot.assignments.filter(item => !item.completed).slice(0, 4)
-  return <><section className="stats"><div className="stat-card"><div className="stat-icon blue"><CalendarDays size={18}/></div><div><small>今日课程</small><strong>{classesLive.length} 节</strong></div></div><div className="stat-card"><div className="stat-icon amber"><Clock3 size={18}/></div><div><small>待完成</small><strong>{dueLive.length} 项</strong></div></div><div className="stat-card"><div className="stat-icon green"><Trophy size={18}/></div><div><small>已获取成绩</small><strong>{snapshot.grades.length} 项</strong></div></div></section><div className="dashboard-grid"><section className="panel schedule"><div className="panel-head"><div><h2>课表</h2><p>来自 SIS 的真实数据</p></div></div><div className="class-list">{classesLive.length ? classesLive.map(item => <article className="class-item" key={item.id}><div className="class-time blue"><strong>{item.start}</strong><span>{item.end}</span></div><div className="class-info"><h3>{item.title}</h3><p>{item.code || '未提供课程代码'} <span>·</span> {item.teacher || '未提供教师'}</p></div><div className="room">{item.room || '未提供地点'}</div></article>) : <p className="empty-state">本次同步没有课表记录</p>}</div></section><section className="panel deadlines"><div className="panel-head"><div><h2>待办</h2><p>来自 Moodle 的真实数据</p></div></div><div className="due-list">{dueLive.length ? dueLive.map(item => <article className="due-item" key={item.id}><span className="due-check"/><div><h3>{item.title}</h3><p>{item.course}</p></div><time>{item.due || '未设置截止时间'}</time></article>) : <p className="empty-state">暂无未完成待办</p>}</div></section></div></>
+  const classesLive = todayClasses(snapshot)
+  const pending = snapshot.assignments.filter(item => !item.completed)
+  const dueLive = pending.slice(0, 4)
+  return <><section className="stats"><div className="stat-card"><div className="stat-icon blue"><CalendarDays size={18}/></div><div><small>今日课程</small><strong>{classesLive.length} 节</strong></div></div><div className="stat-card"><div className="stat-icon amber"><Clock3 size={18}/></div><div><small>待完成</small><strong>{pending.length} 项</strong></div></div><div className="stat-card"><div className="stat-icon green"><Trophy size={18}/></div><div><small>已获取成绩</small><strong>{snapshot.grades.length} 项</strong></div></div></section><div className="dashboard-grid"><section className="panel schedule"><div className="panel-head"><div><h2>课表</h2><p>来自 SIS 的真实数据</p></div></div><div className="class-list">{classesLive.length ? classesLive.map(item => <article className="class-item" key={item.id}><div className="class-time blue"><strong>{item.start}</strong><span>{item.end}</span></div><div className="class-info"><h3>{item.title}</h3><p>{item.code || '未提供课程代码'} <span>·</span> {item.teacher || '未提供教师'}</p></div><div className="room">{item.room || '未提供地点'}</div></article>) : <p className="empty-state">今天没有课表记录</p>}</div></section><section className="panel deadlines"><div className="panel-head"><div><h2>待办</h2><p>来自 Moodle 的真实数据</p></div></div><div className="due-list">{dueLive.length ? dueLive.map(item => <article className="due-item" key={item.id}><span className="due-check"/><div><h3>{item.title}</h3><p>{item.course}</p></div><time>{item.due || '未提供截止时间'}</time></article>) : <p className="empty-state">暂无未完成待办</p>}</div></section></div></>
 }
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)

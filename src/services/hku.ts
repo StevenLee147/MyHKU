@@ -27,9 +27,7 @@ export const HKU_SITES: Record<HkuSite, { label: string; description: string; ur
   sis: {
     label: 'SIS',
     description: '从已登录的 SIS 获取课表',
-    // Official PeopleSoft timetable page. The user still completes SSO/MFA
-    // in the official browser session before the connector reads the page.
-    url: 'https://sis-main.hku.hk/psp/sisprod/EMPLOYEE/PSFT_CS/c/SA_LEARNER_SERVICES.SSR_SSENRL_SCHD_W.GBL?pslnkid=Z_HC_SSR_SSENRL_SCHD_W_LNK',
+    url: 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable',
   },
   moodle: {
     label: 'HKU Moodle',
@@ -187,7 +185,7 @@ export type LiveSnapshot = {
 
 export type LiveClass = { id: string; title: string; code?: string; date?: string; day?: string; start: string; end: string; room?: string; teacher?: string }
 export type LiveCourse = { id: string; title: string; code?: string }
-export type LiveAssignment = { id: string; title: string; course: string; due?: string; completed?: boolean }
+export type LiveAssignment = { id: string; title: string; course: string; due?: string; completed?: boolean; submissionStatus?: string }
 export type LiveResource = { id: string; title: string; course: string; url?: string }
 export type LiveGrade = { id: string; title: string; course: string; value?: string; released?: boolean }
 export type LiveAnnouncement = { id: string; title: string; course: string; published?: string; url?: string }

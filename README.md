@@ -72,6 +72,8 @@ npm run dev
 
 ### 本地验证
 
+`npm run test:learning-data` 在隔离的 Chromium 测试页面中验证课表跨行定位、今日课程统计、Moodle 作业状态、课程资料分栏和下载按钮；`npm run test:desktop-auth` 同时验证桌面登录及文件直接下载。测试使用本地样例，不读取真实账户。
+
 以下检查不需要 HKU 账号，适合确认前端和桥接服务已经启动：
 
 ```powershell

@@ -176,7 +176,7 @@ function normalizeAssignment(item, index) {
   const title = clean(item.title || item.name)
   if (!title) return null
   const completed = bool(item.completed)
-  return { id: idOf(item.id, `assignment-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(clean(item.due) ? { due: clean(item.due, 120) } : {}), ...(completed === undefined ? {} : { completed }) }
+  return { id: idOf(item.id, `assignment-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(clean(item.due) ? { due: clean(item.due, 120) } : {}), ...(clean(item.submissionStatus) ? { submissionStatus: clean(item.submissionStatus, 160) } : {}), ...(completed === undefined ? {} : { completed }) }
 }
 
 function normalizeResource(item, index) {
@@ -215,11 +215,15 @@ function normalizeArray(field, value) {
   return value.map(fn).filter(Boolean).slice(0, 1000)
 }
 
-function mergeById(existing, incoming) {
+function mergeById(existing, incoming, field) {
   // A Moodle page often exposes only one data section at a time. Keep the
   // other sections until a caller explicitly asks for replacement.
-  const merged = new Map(existing.map(item => [item.id, item]))
-  for (const item of incoming) merged.set(item.id, item)
+  const identity = item => ['assignments', 'resources'].includes(field) ? item.id.replace(/^(?:module|activity)-(?=\d+$)/, '') : item.id
+  const merged = new Map(existing.map(item => [identity(item), { ...item, id: identity(item) }]))
+  for (const item of incoming) {
+    const id = identity(item)
+    merged.set(id, { ...merged.get(id), ...item, id })
+  }
   return [...merged.values()].slice(0, 1000)
 }
 
@@ -285,7 +289,7 @@ const server = http.createServer(async (req, res) => {
       for (const field of ARRAY_FIELDS) {
         const values = normalizeArray(field, payload[field])
         if (values !== undefined) {
-          snapshot[field] = replaceFields.includes(field) ? values : mergeById(snapshot[field], values)
+          snapshot[field] = replaceFields.includes(field) ? values : mergeById(snapshot[field], values, field)
           changed += values.length
         }
       }

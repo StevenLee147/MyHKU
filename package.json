@@ -1,7 +1,7 @@
 {
   "name": "myhku-dashboard",
   "private": true,
-  "version": "0.1.4-alpha",
+  "version": "0.2.0-alpha",
   "description": "HKU Portal, SIS and Moodle learning dashboard",
   "author": "MyHKU",
   "main": "desktop/main.mjs",
@@ -10,6 +10,7 @@
     "dev": "vite",
     "check:privacy": "node scripts/check-privacy.mjs",
     "test:privacy": "node --test scripts/check-privacy.test.mjs",
+    "test:learning-data": "npm run build:web && node scripts/test-learning-data.mjs",
     "test:desktop-auth": "npm run build:web && node scripts/test-desktop-auth.mjs",
     "build": "npm run check:privacy && tsc -b && vite build && node scripts/sync-android-assets.mjs && node scripts/check-privacy.mjs --include-build --include-android-build",
     "build:web": "npm run check:privacy && tsc -b && vite build && node scripts/check-privacy.mjs --include-build",

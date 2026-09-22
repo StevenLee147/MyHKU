@@ -2,7 +2,7 @@
 // official-site fixtures, isolated from the installed app and all real data.
 import { app, BrowserWindow, session } from 'electron'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import net from 'node:net'
@@ -104,6 +104,8 @@ app.whenReady().then(async () => {
     if (url.hostname === 'sweb.hku.hk') return html('<div class="bkgCalViewWDHeader">Monday</div>')
     if (url.hostname === 'intraweb.hku.hk') return html('<p>Loading…</p>')
     if (url.hostname === 'moodle.hku.hk') {
+      if (url.pathname === '/mod/resource/view.php') return html('<object data="https://moodle.hku.hk/pluginfile.php/123/mod_resource/content/1/fixture.txt"></object>')
+      if (url.pathname.startsWith('/pluginfile.php/')) return new Response('Fixture document bytes', { headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="fixture.txt"' } })
       visits.moodle++
       if (url.searchParams.has('authCAS')) {
         moodleAuthenticated = true
@@ -157,9 +159,33 @@ app.whenReady().then(async () => {
   assert.equal(visits.casEmail, 1, 'valid SIS refresh reuses the official Portal SSO entry')
   assert.equal(BrowserWindow.getAllWindows().length, 4)
   assert.equal(shows, dashboardShows, 'automatic redirect and session reuse never reveal a login window')
+  const downloadPath = join(app.getPath('userData'), 'fixture.txt')
+  app.setPath('downloads', app.getPath('userData'))
+  assert.equal(await invoke('window.myhkuDesktop.downloadResource("https://moodle.hku.hk/mod/resource/view.php?id=13")'), 1)
+  assert.equal(readFileSync(downloadPath, 'utf8'), 'Fixture document bytes')
+  await invoke('window.myhkuDesktop.downloadResource("https://moodle.hku.hk/mod/resource/view.php?id=13")')
+  assert.equal(readFileSync(join(app.getPath('userData'), 'fixture (1).txt'), 'utf8'), 'Fixture document bytes', 'repeated downloads never overwrite existing files')
+  assert.equal(BrowserWindow.getAllWindows().length, 4, 'download parser is disposed and no original page window opens')
+  assert.equal(shows, dashboardShows, 'resource download never reveals a window')
+  console.log('PASS native resource IPC downloads file bytes without opening the Moodle page')
+  const bridgeUrl = `http://127.0.0.1:${process.env.MYHKU_BRIDGE_PORT}`
+  const ingest = async assignments => {
+    const response = await fetch(`${bridgeUrl}/api/ingest/moodle`, { method: 'POST', headers: { Origin: 'https://moodle.hku.hk', 'Content-Type': 'application/json' }, body: JSON.stringify({ assignments }) })
+    assert.equal(response.ok, true)
+  }
+  await ingest([{ id: 'module-123', title: 'Fixture assignment', course: 'Example course', completed: true }])
+  await ingest([{ id: '123', title: 'Fixture assignment', course: 'Example course', due: '22 September, 11:59 PM', completed: false, submissionStatus: 'No submission' }])
+  await ingest([{ id: '123', title: 'Fixture assignment', course: 'Example course' }])
+  const assignments = (await (await fetch(`${bridgeUrl}/api/snapshot`)).json()).assignments
+  assert.equal(assignments.length, 1, 'old course-card IDs merge with overview activity IDs')
+  assert.equal(assignments[0].completed, false)
+  assert.equal(assignments[0].submissionStatus, 'No submission')
+  assert.equal(assignments[0].due, '22 September, 11:59 PM', 'a partial course card cannot erase overview details')
+  console.log('PASS bridge retains authoritative assignment dates and status across partial refreshes')
   const portalWindow = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('studentportal.hku.hk'))
   const moodleWindow = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('moodle.hku.hk'))
-  const sisWindow = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('sis-main.hku.hk'))
+  const sisWindow = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('sweb.hku.hk'))
+  assert.ok(sisWindow.webContents.getURL().includes('/MyWeekly/showTimetable'), 'SIS SSO continues to the official student timetable')
   await sisWindow.webContents.mainFrame.executeJavaScript('document.body.innerHTML = `<iframe src="https://intraweb.hku.hk/slow-frame"></iframe><iframe src="https://sweb.hku.hk/timetable"></iframe>`')
   await until(() => sisWindow.webContents.mainFrame.frames.filter(frame => /https:\/\/(?:intraweb|sweb)\.hku\.hk\//.test(frame.url)).length === 2, 'cross-origin SIS frames')
   const slowFrame = sisWindow.webContents.mainFrame.frames.find(frame => frame.url.includes('intraweb.hku.hk'))

@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, webFrameMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, session, shell, webFrameMain } from 'electron'
+import { fileLinksFromHtml, resolveMoodleDownloads, saveMoodleDownload } from './downloads.mjs'
 import { AuthCoordinator, AUTH_TIMING, SERVICE_URLS, inspectAuthPage, serviceForUrl } from './auth-flow.mjs'
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -271,6 +272,12 @@ function attachConnector(win, record) {
           auth.update(record.site, 'connected', '已验证官方登录会话')
           if (!record.browse && win.isVisible()) win.hide()
         }
+        // Use the student's official MyWeekly timetable after Portal/SIS SSO.
+        // PeopleSoft's weekly view can contain a different set of meetings.
+        if (record?.site === 'sis' && !record.browse && new URL(current).hostname === 'sis-main.hku.hk') {
+          await win.loadURL(SERVICE_URLS.sis)
+          return
+        }
         if (!published) {
           published = true
           void publishPage(mainFrame)
@@ -401,7 +408,10 @@ function startServiceLogin(record) {
   record.refresh = false
 }
 
+const downloadSessions = new WeakSet()
 function attachDownloadHandler(win) {
+  if (downloadSessions.has(win.webContents.session)) return
+  downloadSessions.add(win.webContents.session)
   win.webContents.session.on('will-download', (_event, item) => {
     // Downloads are user initiated by clicking a Moodle resource. Electron
     // keeps the authenticated session for the request and writes only the
@@ -606,6 +616,19 @@ handleDashboard('myhku-refresh-hku', () => {
   return authWindows.size
 })
 
+handleDashboard('myhku-download-resource', async (_event, url) => {
+  const authenticated = session.fromPartition('persist:myhku-hku')
+  const parser = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
+  try {
+    await parser.loadURL('about:blank')
+    const fetchPage = value => authenticated.fetch(value, { redirect: 'manual', signal: AbortSignal.timeout(120_000) })
+    const urls = await resolveMoodleDownloads(String(url), fetchPage,
+      (html, base) => parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`))
+    for (const file of urls) await saveMoodleDownload(file, app.getPath('downloads'), fetchPage)
+    return urls.length
+  } finally { parser.destroy() }
+})
+
 handleDashboard('myhku-schedule-week', async (_event, rawOffset) => {
   const offset = Math.max(-1, Math.min(1, Number(rawOffset) || 0))
   const record = auth.request('sis')
@@ -618,7 +641,7 @@ handleDashboard('myhku-schedule-week', async (_event, rawOffset) => {
     })
   }
   if (offset === 0) {
-    await sisWindow.webContents.reload()
+    await sisWindow.loadURL(SERVICE_URLS.sis)
     return true
   }
   // PeopleSoft renders the timetable controls inside the same-origin
@@ -629,8 +652,9 @@ handleDashboard('myhku-schedule-week', async (_event, rawOffset) => {
   const control = offset > 0 ? 'DERIVED_CLASS_S_SSR_NEXT_WEEK' : 'DERIVED_CLASS_S_SSR_PREV_WEEK'
   const clicked = await sisWindow.webContents.executeJavaScript(`(() => {
     const frame = document.querySelector('#ptifrmtgtframe')
-    const doc = frame?.contentDocument
-    const button = doc?.querySelector('[name="${control}"]')
+    const doc = frame?.contentDocument || document
+    const pattern = ${offset > 0 ? '/next\\s*week|下(?:一)?周/i' : '/prev(?:ious)?\\s*week|上(?:一)?周/i'}
+    const button = doc.querySelector('[name="${control}"]') || Array.from(doc.querySelectorAll('button, input[type="button"], input[type="submit"], a[href]')).find(node => pattern.test(node.textContent || node.value || node.getAttribute('aria-label') || ''))
     if (!button) throw new Error('SIS 周切换按钮不可用')
     button.click()
     return true

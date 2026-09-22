@@ -18,8 +18,8 @@ android {
         applicationId = "hk.my.myhku"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("myhkuVersionCode").orNull?.toInt() ?: 4
-        versionName = providers.gradleProperty("myhkuVersionName").orNull ?: "0.1.4-alpha"
+        versionCode = providers.gradleProperty("myhkuVersionCode").orNull?.toInt() ?: 5
+        versionName = providers.gradleProperty("myhkuVersionName").orNull ?: "0.2.0-alpha"
     }
 
     signingConfigs {

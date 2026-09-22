@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
   platform: process.platform,
   version: process.versions.electron,
   refreshHku: () => ipcRenderer.invoke('myhku-refresh-hku'),
+  downloadResource: (url) => ipcRenderer.invoke('myhku-download-resource', String(url)),
   accountStatus: () => ipcRenderer.invoke('myhku-account-status'),
   authSessions: () => ipcRenderer.invoke('myhku-auth-sessions'),
   loginSite: (site) => ipcRenderer.invoke('myhku-login-site', site),
