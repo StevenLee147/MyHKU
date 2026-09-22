@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('myhkuDesktop', {
+  legalStatus: () => ipcRenderer.invoke('myhku-legal-status'),
+  acceptLegal: version => ipcRenderer.invoke('myhku-accept-legal', String(version)),
+  declineLegal: () => ipcRenderer.invoke('myhku-decline-legal'),
   platform: process.platform,
   version: process.versions.electron,
   refreshHku: () => ipcRenderer.invoke('myhku-refresh-hku'),

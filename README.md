@@ -1,5 +1,7 @@
 # MyHKU dashboard
 
+<img src="public/brand/logo.svg" width="96" alt="MyHKU Logo">
+
 基于 Vite、React 和 TypeScript 的桌面/手机响应式仪表盘。已接入 HKU 官方登录入口：Portal/SIS 使用 `https://studentportal.hku.hk/`，Moodle 使用 CAS 登录地址。首次使用创建本地账户并完成一次官方 2FA；之后桌面端自动复用会话并尝试后台登录。
 
 ## 下载与设备对应
@@ -29,13 +31,13 @@
 
 ### Windows 电脑
 
-1. 普通安装选名称含 `Setup` 的 EXE，双击并按向导安装；便携版选不含 `Setup` 的 EXE，保存到固定文件夹后直接运行。
+1. 普通安装选名称含 `Setup` 的 EXE，双击阅读安装协议，在向导中选择安装位置；便携版选不含 `Setup` 的 EXE，保存到固定文件夹后直接运行。
 2. 若出现「Windows 已保护你的电脑」，核对下载来源和校验值后选择「更多信息 → 仍要运行」。若没有此选项或电脑由学校/单位管理，请联系管理员处理，不要关闭系统防护。
-3. 从开始菜单或便携版 EXE 启动 MyHKU，完成下方首次登录步骤。更新安装版前先退出旧版本，再运行新安装包。
+3. 从开始菜单或便携版 EXE 启动 MyHKU，完成下方首次登录步骤。更新安装版前先退出旧版本，再运行新安装包；安装器自动识别旧目录并覆盖程序，保留本地账户、会话、设置和缓存，无需先卸载。便携版请退出后手工替换原 EXE。
 
 ### Mac（Apple Silicon）
 
-1. 在「苹果菜单 → 关于本机」确认芯片为 Apple M 系列。下载 `arm64.dmg`，打开后将 **MyHKU 拖入 Applications（应用程序）**，等待复制完成，再在 Finder 中推出安装磁盘。ZIP 备用包解压后同样将 `MyHKU.app` 移入「应用程序」。
+1. 在「苹果菜单 → 关于本机」确认芯片为 Apple M 系列。下载 `arm64.dmg`，打开后将 **MyHKU 拖入 Applications（应用程序）**，等待复制完成，再在 Finder 中推出安装磁盘。也可在 Finder 中将应用拖入其他有写入权限的目录。ZIP 备用包解压后同样移动 `MyHKU.app`。更新时退出旧版，将新版放入原目录并确认「替换」；无需先卸载，本地账户和设置保留。
 2. 从「应用程序」打开 MyHKU。若提示无法验证开发者或 Apple 无法检查恶意软件，关闭提示，前往「系统设置 → 隐私与安全性」，找到 MyHKU 的拦截记录，点击「仍要打开（Open Anyway）」并确认。
 3. 若仍显示「MyHKU 已损坏，无法打开」且上一步不可用，先核对官方来源和 `SHA256SUMS.txt`。确认应用已复制到 `/Applications/MyHKU.app` 后，打开「终端」执行以下命令，再从「应用程序」启动：
 
@@ -57,7 +59,7 @@ xattr -dr com.apple.quarantine /Applications/MyHKU.app
 
 从同一 Release 下载 `SHA256SUMS.txt`，找到对应文件名的条目，对比 SHA-256 值。Windows PowerShell 使用 `Get-FileHash -Algorithm SHA256 "下载文件的完整路径"`；Mac 终端使用 `shasum -a 256 "下载文件的完整路径"`。Android APK 也可先在电脑校验后传到手机。
 
-首次启动会显示本地账户向导；保存账户后，在打开的 **HKU 官方 Portal / Moodle 登录窗口**中完成 SSO 和首次 MFA / 2FA。应用不会替你绕过验证；会话过期时需再次在官方窗口登录。完成后返回仪表盘并同步课程数据。
+首次启动（或协议版本变化时）先阅读并逐项同意用户协议、隐私说明及免责声明；确认前不启动官方登录或同步，可在设置中重读。桌面端随后显示本地账户向导；保存账户后，在打开的 **HKU 官方 Portal / Moodle 登录窗口**中完成 SSO 和首次 MFA / 2FA。应用不会替你绕过验证；会话过期时需再次在官方窗口登录。完成后返回仪表盘并同步课程数据。
 
 ## 运行
 
@@ -174,3 +176,7 @@ npm run bridge:cdp:once
   --user-data-dir="$pwd\.myhku\chrome-profile" https://moodle.hku.hk/ https://studentportal.hku.hk/
 npm run bridge:cdp -- --no-launch
 ```
+
+## 品牌与安装协议
+
+Logo、各端图标、协议来源和覆盖升级约定见 [品牌与安装说明](docs/branding-and-installation.md)。版本号和 Android 递增版本码在 `package.json` 中统一维护。新版本安装支持替换现有程序并保留用户数据；macOS 按系统提示确认替换，Android 按系统提示确认安装。本应用目前不提供后台下载或静默自动更新。

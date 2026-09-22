@@ -2,6 +2,9 @@
 type DesktopSessions = Record<'portal' | 'sis' | 'moodle', { state: string; detail?: string; checkedAt?: string; revision?: number }>
 interface Window {
   myhkuDesktop?: {
+    legalStatus?: () => Promise<{ accepted: boolean; version: string }>
+    acceptLegal?: (version: string) => Promise<void>
+    declineLegal?: () => Promise<void>
     platform?: string
     version?: string
     refreshHku?: () => Promise<number>
@@ -17,6 +20,7 @@ interface Window {
     onAuthStatus?: (listener: (payload?: { state?: string; configured?: boolean; url?: string; detail?: string; requires2fa?: boolean; sessions?: DesktopSessions }) => void) => () => void
   }
   myhkuAndroid?: {
+    hasAcceptedLegal?: () => boolean
     getSnapshot?: () => string
     getSession?: (site: string) => string
     refreshHku?: () => string

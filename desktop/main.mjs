@@ -19,6 +19,18 @@ const preloadFile = join(here, 'preload.cjs')
 const sourceRoot = app.isPackaged ? join(process.resourcesPath, 'app.asar') : root
 const connectorFile = join(sourceRoot, 'extension', 'content.js')
 const dashboardFile = join(sourceRoot, 'dist', 'index.html')
+const legalVersion = JSON.parse(readFileSync(join(sourceRoot, 'dist', 'legal', 'agreements.json'), 'utf8')).version
+let servicesStarted = false
+function hasLegalConsent() {
+  try { return JSON.parse(readFileSync(join(app.getPath('userData'), 'myhku-legal-consent.json'), 'utf8')).version === legalVersion }
+  catch { return false }
+}
+function startConsentedServices() {
+  if (servicesStarted || !hasLegalConsent()) return
+  startBridge()
+  servicesStarted = true
+  if (readAccount() || forceOpenLoginOnStartup) beginLogin(forceOpenLoginOnStartup)
+}
 const bridgePort = process.env.MYHKU_BRIDGE_PORT || '17321'
 const uiPort = process.env.MYHKU_UI_PORT || '17322'
 const devUrl = process.env.MYHKU_DEV_SERVER_URL
@@ -495,6 +507,7 @@ function createAuthWindow(url, show = true, record = null) {
 
 function createDashboard() {
   dashboard = new BrowserWindow({
+    icon: join(sourceRoot, 'dist', 'brand', 'icon-512.png'),
     width: 1440,
     height: 940,
     minWidth: 980,
@@ -561,9 +574,21 @@ function handleDashboard(channel, handler) {
     if (!dashboard || dashboard.isDestroyed() || event.sender !== dashboard.webContents ||
       event.senderFrame !== dashboard.webContents.mainFrame) throw new Error('仅仪表盘可以管理本地账户和登录')
     if (changingAccount) throw new Error('正在切换账户，请稍后重试')
+    if (!['myhku-legal-status', 'myhku-accept-legal', 'myhku-decline-legal'].includes(channel) && !hasLegalConsent()) throw new Error('请先阅读并同意使用协议')
     return handler(event, ...args)
   })
 }
+
+handleDashboard('myhku-legal-status', () => ({ accepted: hasLegalConsent(), version: legalVersion }))
+handleDashboard('myhku-accept-legal', (_event, version) => {
+  if (version !== legalVersion) throw new Error('协议版本已变化，请重新阅读')
+  const file = join(app.getPath('userData'), 'myhku-legal-consent.json')
+  mkdirSync(app.getPath('userData'), { recursive: true })
+  writeFileSync(`${file}.tmp`, JSON.stringify({ version, acceptedAt: new Date().toISOString() }), { mode: 0o600 })
+  renameSync(`${file}.tmp`, file)
+  startConsentedServices()
+})
+handleDashboard('myhku-decline-legal', () => app.quit())
 
 handleDashboard('myhku-account-status', async () => {
   const account = readAccount()
@@ -687,10 +712,10 @@ app.on('second-instance', () => {
 })
 
 if (ownsInstance) app.whenReady().then(() => {
-  startBridge()
+  app.setAppUserModelId('hk.my.myhku')
   startDashboardServer()
   createDashboard()
-  if (readAccount() || forceOpenLoginOnStartup) beginLogin(forceOpenLoginOnStartup)
+  startConsentedServices()
   app.on('activate', () => { if (!dashboard || dashboard.isDestroyed()) createDashboard() })
 }).catch(error => dialog.showErrorBox('MyHKU 启动失败', error.stack || error.message))
 

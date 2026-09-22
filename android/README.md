@@ -19,3 +19,7 @@ Set `MYHKU_ANDROID_KEYSTORE_PATH`, `MYHKU_ANDROID_KEY_ALIAS`, `MYHKU_ANDROID_KEY
 CI verifies APK signatures, the pinned certificate, package ID, version, minimum SDK, non-debuggable status, ZIP alignment, and the AAB signing identity. It then installs and starts the actual APK on API 26 and API 35 emulators and verifies replacement of an older APK signed with the same key. A failed check prevents publication. The older APK is only a test fixture and is never uploaded to the release.
 
 Old v0.1.1/v0.1.2 debug builds used ephemeral runner keys and cannot be upgraded with the new signing identity. Users who installed them need to preserve any required local data before uninstalling that old test build once. Subsequent releases retain the new certificate and increase `versionCode`. The public download guide explains this migration.
+
+## Branding and agreements
+
+The app uses adaptive launcher artwork derived from the MyHKU book/M/star identity. Before creating either WebView, a native screen presents all three bundled agreements and requires separate confirmations. The agreement version and acceptance time persist in app-private preferences; upgrades retain them, and a new agreement version requires consent again. The dashboard Settings page provides the same documents for review. The release version and monotonically increasing `androidVersionCode` come from the root `package.json`. CI downloads the actual v0.2.0-alpha APK as its upgrade baseline.

@@ -15,6 +15,7 @@ app.whenReady().then(async () => {
   const mock = `
     window.sessions = Object.fromEntries(['portal', 'sis', 'moodle'].map(site => [site, { state: 'checking', revision: 1 }]));
     window.myhkuDesktop = {
+      legalStatus: async () => ({ accepted: true }),
       accountStatus: async () => ({ configured: true, localUsername: 'Fixture', email: 'student@example.test', sessions: window.sessions }),
       authSessions: async () => {
         if (window.failReads) throw new Error('Fixture IPC unavailable');

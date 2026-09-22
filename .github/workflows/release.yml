@@ -44,6 +44,10 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run desktop:package -- --win --x64 --publish never
         env: { MYHKU_RELEASE_DIR: release/desktop }
+      - name: Verify Windows custom location and upgrade from previous release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows-install-smoke.ps1
       - name: Package macOS (ad-hoc by default; notarized when configured)
         if: runner.os == 'macOS'
         run: npm run desktop:package -- --mac --arm64 --publish never
@@ -107,12 +111,12 @@ jobs:
           keystore_path="$RUNNER_TEMP/myhku-release.jks"
           printf '%s' "$MYHKU_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
           printf 'MYHKU_ANDROID_KEYSTORE_PATH=%s\n' "$keystore_path" >> "$GITHUB_ENV"
-      - name: Build an older signed APK for upgrade verification
-        working-directory: android
+      - name: Read Android release version
+        run: node -e 'console.log("ANDROID_VERSION_CODE=" + require("./package.json").androidVersionCode)' >> "$GITHUB_ENV"
+      - name: Download the actual previous release for upgrade verification
         run: |
-          ./gradlew :app:assembleRelease -PmyhkuVersionCode=4 -PmyhkuVersionName=0.1.4-alpha
-          mkdir -p ../release
-          cp app/build/outputs/apk/release/app-release.apk ../release/android-upgrade-baseline.apk
+          mkdir -p release
+          curl --fail --location --retry 3 --output release/android-upgrade-baseline.apk https://github.com/StevenLee147/MyHKU/releases/download/v0.2.0-alpha/app-release.apk
       - run: ./gradlew :app:bundleRelease :app:assembleRelease
         working-directory: android
       - name: Verify Android release identity, signatures and alignment
@@ -120,7 +124,7 @@ jobs:
           mkdir -p release/android
           cp android/app/build/outputs/apk/release/app-release.apk release/android/
           cp android/app/build/outputs/bundle/release/app-release.aab release/android/
-          node scripts/verify-android-release.mjs release/android/app-release.apk release/android/app-release.aab 5
+          node scripts/verify-android-release.mjs release/android/app-release.apk release/android/app-release.aab "$ANDROID_VERSION_CODE"
           cp android/release-certificate.sha256 release/android/ANDROID-SIGNING-CERTIFICATE.sha256
       - name: Enable Android emulator acceleration
         run: |
@@ -136,7 +140,7 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk 5 26
+          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk "$ANDROID_VERSION_CODE" 26
       - name: Install, upgrade and launch on Android 15
         id: android35
         continue-on-error: true
@@ -146,7 +150,7 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk 5 35
+          script: bash scripts/android-install-smoke.sh release/android/app-release.apk release/android-upgrade-baseline.apk "$ANDROID_VERSION_CODE" 35
       - name: Require both Android installation checks to pass
         if: steps.android26.outcome != 'success' || steps.android35.outcome != 'success'
         run: exit 1

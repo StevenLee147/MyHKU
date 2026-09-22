@@ -1,7 +1,7 @@
 {
   "name": "myhku-dashboard",
   "private": true,
-  "version": "0.2.0-alpha",
+  "version": "0.2.1-alpha",
   "description": "HKU Portal, SIS and Moodle learning dashboard",
   "author": "MyHKU",
   "main": "desktop/main.mjs",
@@ -12,8 +12,8 @@
     "test:privacy": "node --test scripts/check-privacy.test.mjs",
     "test:learning-data": "npm run build:web && node scripts/test-learning-data.mjs",
     "test:desktop-auth": "npm run build:web && node scripts/test-desktop-auth.mjs",
-    "build": "npm run check:privacy && tsc -b && vite build && node scripts/sync-android-assets.mjs && node scripts/check-privacy.mjs --include-build --include-android-build",
-    "build:web": "npm run check:privacy && tsc -b && vite build && node scripts/check-privacy.mjs --include-build",
+    "build": "npm run generate:branding && npm run check:privacy && tsc -b && vite build && node scripts/sync-android-assets.mjs && node scripts/check-privacy.mjs --include-build --include-android-build",
+    "build:web": "npm run generate:branding && npm run check:privacy && tsc -b && vite build && node scripts/check-privacy.mjs --include-build",
     "package:web": "npm run build:web && node scripts/package-web.mjs",
     "preview": "vite preview",
     "bridge": "node bridge/server.mjs",
@@ -28,7 +28,8 @@
     "test:macos-release": "node --test scripts/macos-release.test.mjs scripts/verify-macos-release.test.mjs",
     "android:debug": "npm run build && android\\gradlew.bat --project-dir android :app:assembleDebug",
     "android:release": "npm run build && android\\gradlew.bat --project-dir android :app:bundleRelease",
-    "release:stage": "node scripts/stage-release.mjs"
+    "release:stage": "node scripts/stage-release.mjs",
+    "generate:branding": "node scripts/generate-branding.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -42,7 +43,8 @@
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "electron": "^44.3.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "sharp": "^0.34.5"
   },
   "build": {
     "appId": "hk.my.myhku",
@@ -78,10 +80,24 @@
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
-      "artifactName": "${productName}.Setup.${version}.${ext}"
+      "artifactName": "${productName}.Setup.${version}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "license": "build/license.txt",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "language": "2052"
     },
     "portable": {
       "artifactName": "${productName}.${version}.${ext}"
@@ -97,11 +113,16 @@
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "icon": "build/icon.icns"
     },
     "dmg": {
       "sign": false,
-      "writeUpdateInfo": false
+      "writeUpdateInfo": false,
+      "license": {
+        "zh_CN": "public/legal/agreements.txt"
+      }
     }
-  }
+  },
+  "androidVersionCode": 6
 }

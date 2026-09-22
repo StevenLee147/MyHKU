@@ -1,7 +1,11 @@
+import groovy.json.JsonSlurper
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val packageMetadata = JsonSlurper().parse(rootProject.file("../package.json")) as Map<*, *>
 
 val releaseKeystore = System.getenv("MYHKU_ANDROID_KEYSTORE_PATH")
 val releaseAlias = System.getenv("MYHKU_ANDROID_KEY_ALIAS")
@@ -18,8 +22,8 @@ android {
         applicationId = "hk.my.myhku"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("myhkuVersionCode").orNull?.toInt() ?: 5
-        versionName = providers.gradleProperty("myhkuVersionName").orNull ?: "0.2.0-alpha"
+        versionCode = providers.gradleProperty("myhkuVersionCode").orNull?.toInt() ?: (packageMetadata["androidVersionCode"] as Number).toInt()
+        versionName = providers.gradleProperty("myhkuVersionName").orNull ?: packageMetadata["version"].toString()
     }
 
     signingConfigs {

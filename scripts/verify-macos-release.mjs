@@ -9,7 +9,14 @@ const execFileAsync = promisify(execFile)
 
 async function runCommand(command, args) {
   try {
-    return await execFileAsync(command, args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 })
+    const execution = execFileAsync(command, args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 })
+    // License-bearing disk images ask on stdin before mounting. This verifies
+    // our own release in CI; end stdin so hdiutil cannot wait for an operator.
+    if (command === 'hdiutil' && args[0] === 'attach') {
+      execution.child.stdin.on('error', () => {})
+      execution.child.stdin.end('Y\n')
+    }
+    return await execution
   } catch (error) {
     throw new Error(`${command} failed: ${error.stderr || error.stdout || error.message}`, { cause: error })
   }

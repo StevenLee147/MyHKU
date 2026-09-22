@@ -11,6 +11,8 @@ import android.webkit.WebSettings
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.CheckBox
+import android.widget.ScrollView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -38,6 +40,44 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!hasLegalConsent()) { showLegalAgreement { initializeApp(savedInstanceState) }; return }
+        initializeApp(savedInstanceState)
+    }
+
+    private fun legalDocuments() = JSONObject(assets.open("dashboard-app/legal/agreements.json").bufferedReader().use { it.readText() })
+    private fun hasLegalConsent() = getSharedPreferences("myhku_legal", MODE_PRIVATE).getString("version", null) == legalDocuments().getString("version")
+
+    private fun showLegalAgreement(onAccepted: () -> Unit) {
+        val legal = legalDocuments()
+        val documents = legal.getJSONArray("documents")
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 24, 32, 24) }
+        content.addView(TextView(this).apply { text = "MyHKU · 使用须知"; textSize = 24f })
+        content.addView(TextView(this).apply { text = "独立开发的学习工具，非 HKU 官方应用。请阅读并逐项确认。协议版本：${legal.getString("version")}"; textSize = 15f })
+        val checks = mutableListOf<CheckBox>()
+        val accept = Button(this).apply { text = "同意并继续"; isEnabled = false }
+        for (index in 0 until documents.length()) {
+            val document = documents.getJSONObject(index)
+            content.addView(TextView(this).apply { text = "\n${document.getString("title")}"; textSize = 20f })
+            val paragraphs = document.getJSONArray("paragraphs")
+            content.addView(TextView(this).apply { text = (0 until paragraphs.length()).joinToString("\n\n") { paragraphs.getString(it) }; textSize = 15f })
+            val check = CheckBox(this).apply {
+                text = "我已阅读并同意《${document.getString("title")}》"
+                setOnCheckedChangeListener { _, _ -> accept.isEnabled = checks.size == documents.length() && checks.all { it.isChecked } }
+            }
+            checks.add(check); content.addView(check)
+        }
+        content.addView(accept)
+        content.addView(Button(this).apply { text = "不同意并退出"; setOnClickListener { finish() } })
+        accept.setOnClickListener {
+            if (!checks.all { it.isChecked }) return@setOnClickListener
+            val saved = getSharedPreferences("myhku_legal", MODE_PRIVATE).edit().putString("version", legal.getString("version")).putLong("acceptedAt", System.currentTimeMillis()).commit()
+            if (saved) onAccepted() else android.widget.Toast.makeText(this, "无法保存协议确认，请重试", android.widget.Toast.LENGTH_LONG).show()
+        }
+        setContentView(ScrollView(this).apply { addView(content) })
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun initializeApp(savedInstanceState: Bundle?) {
         CookieManager.getInstance().setAcceptCookie(true)
         snapshotPrefs = runCatching {
             val key = MasterKey.Builder(this).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
@@ -115,7 +155,7 @@ class MainActivity : AppCompatActivity() {
         ))
         dashboard = WebView(this).apply {
             settings.javaScriptEnabled = true
-            settings.domStorageEnabled = false
+            settings.domStorageEnabled = true
             // The dashboard is a bundled read-only asset.
             settings.allowFileAccess = true
             addJavascriptInterface(DashboardBridge(), "MyHKUDashboard")
@@ -130,12 +170,11 @@ class MainActivity : AppCompatActivity() {
         ))
         setContentView(root)
 
-        if (savedInstanceState == null) webView.loadUrl(MOODLE_URL)
-        else webView.restoreState(savedInstanceState)
+        if (savedInstanceState == null || webView.restoreState(savedInstanceState) == null) webView.loadUrl(MOODLE_URL)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        webView.saveState(outState)
+        if (::webView.isInitialized) webView.saveState(outState)
         super.onSaveInstanceState(outState)
     }
 
@@ -225,6 +264,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private inner class DashboardBridge {
+        @android.webkit.JavascriptInterface
+        fun hasAcceptedLegal(): Boolean = hasLegalConsent()
+
         @android.webkit.JavascriptInterface
         fun refreshHku(): String {
             runOnUiThread { if (::webView.isInitialized) webView.reload() }

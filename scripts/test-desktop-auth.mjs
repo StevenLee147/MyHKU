@@ -7,6 +7,7 @@ for (const [command, args] of [
   [process.execPath, ['--test', 'scripts/desktop-auth.test.mjs']],
   [electron, ['scripts/desktop-auth-browser.mjs']],
   [electron, ['scripts/desktop-auth-ui.mjs']],
+  [electron, ['scripts/legal-ui.mjs']],
   [electron, ['scripts/desktop-auth-integration.mjs']],
 ]) {
   const code = await new Promise((resolve, reject) => {

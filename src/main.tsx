@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useMemo, useRef, useState, type FormEvent } from
 import { createRoot } from 'react-dom/client'
 import { Bell, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Clock3, Download, ExternalLink, FileText, LayoutDashboard, Link2, LogIn, Menu, RefreshCw, Search, Settings, ShieldCheck, Sparkles, Trophy, X, CircleAlert } from 'lucide-react'
 import './styles.css'
+import { LegalGate, LegalSettings } from './legal'
 import { hongKongDate, scheduleDate, todayClasses } from './services/schedule'
 import { applyDesktopSessions, cacheSnapshot, checkAllConnections, checkConnection, fetchLiveSnapshot, getCachedSnapshot, getConnectionStates, getDataMode, HKU_SITES, notifySnapshotChanges, openOfficialLogin, safeHkuUrl, setDataMode, type ConnectionState, type DataMode, type HkuSite, type LiveSnapshot, type SiteConnection } from './services/hku'
 
@@ -44,7 +45,7 @@ function AccountSetup({ onReady }: { onReady: (account: { username: string; emai
     } catch (cause) { setError(cause instanceof Error ? cause.message : '账户保存失败') }
     finally { setBusy(false); setPassword('') }
   }
-  return <div className="account-gate"><div className="account-card"><div className="account-mark">▣</div><p className="eyebrow">第一次使用 MyHKU</p><h1>创建你的 HKU 账户</h1><p className="account-intro">保存后，MyHKU 会在后台复用官方登录会话。首次登录仍会在 HKU 官方页面完成 2FA。</p><form onSubmit={submit} className="account-form"><label>本地用户名<input value={username} onChange={event => setUsername(event.target.value)} placeholder="请输入本地用户名" autoComplete="username" autoFocus /></label><label>HKU 邮箱<input value={email} onChange={event => setEmail(event.target.value)} type="email" autoComplete="email" /></label><label>HKU 密码<input value={password} onChange={event => setPassword(event.target.value)} type="password" autoComplete="current-password" /></label>{error && <p className="account-error">{error}</p>}<button className="account-submit" disabled={busy}>{busy ? <><RefreshCw size={15} className="spin"/> 正在保存…</> : <><LogIn size={15}/> 保存并开始首次登录</>}</button></form><p className="account-footnote"><ShieldCheck size={14}/> 密码只交给桌面版的系统安全存储，不会进入网页缓存或同步数据。</p></div></div>
+  return <div className="account-gate"><div className="account-card"><img className="account-mark" src="./brand/logo.svg" alt="MyHKU"/><p className="eyebrow">第一次使用 MyHKU</p><h1>创建你的 HKU 账户</h1><p className="account-intro">保存后，MyHKU 会在后台复用官方登录会话。首次登录仍会在 HKU 官方页面完成 2FA。</p><form onSubmit={submit} className="account-form"><label>本地用户名<input value={username} onChange={event => setUsername(event.target.value)} placeholder="请输入本地用户名" autoComplete="username" autoFocus /></label><label>HKU 邮箱<input value={email} onChange={event => setEmail(event.target.value)} type="email" autoComplete="email" /></label><label>HKU 密码<input value={password} onChange={event => setPassword(event.target.value)} type="password" autoComplete="current-password" /></label>{error && <p className="account-error">{error}</p>}<button className="account-submit" disabled={busy}>{busy ? <><RefreshCw size={15} className="spin"/> 正在保存…</> : <><LogIn size={15}/> 保存并开始首次登录</>}</button></form><p className="account-footnote"><ShieldCheck size={14}/> 密码只交给桌面版的系统安全存储，不会进入网页缓存或同步数据。</p></div></div>
 }
 
 function ConnectionSettings({ mode, setMode, states, setStates, onNotice }: {
@@ -75,7 +76,7 @@ function ConnectionSettings({ mode, setMode, states, setStates, onNotice }: {
     catch { onNotice('无法读取连接状态，请稍后重试') }
     finally { setChecking(null) }
   }
-  return <section className="panel connections-panel">
+  return <><section className="panel connections-panel">
     <div className="panel-head"><div><h2>HKU 服务连接</h2><p>账户凭据保存在本机系统安全存储，登录仍通过 HKU 官方页面完成</p></div><button className="text-btn" onClick={checkAll} disabled={checking !== null}><RefreshCw size={13} className={checking === 'all' ? 'spin' : ''}/> 检查全部</button></div>
     <div className="mode-switch" role="group" aria-label="数据来源"><span>数据来源</span><button className={mode === 'demo' ? 'selected' : ''} onClick={() => { setMode('demo'); onNotice('已切换到演示数据') }}>演示数据</button><button className={mode === 'live' ? 'selected' : ''} onClick={() => { setMode('live'); onNotice('真实模式已启用，请先连接 HKU 服务') }}>真实模式</button></div>
     <div className="connection-list">{(Object.keys(HKU_SITES) as HkuSite[]).map(site => {
@@ -84,7 +85,7 @@ function ConnectionSettings({ mode, setMode, states, setStates, onNotice }: {
       return <article className="connection-card" key={site}><div className="connection-icon"><ShieldCheck size={19}/></div><div className="connection-copy"><strong>{item.label}</strong><span>{item.description}</span><small className={`connection-state ${state.state}`}><i/>{connectionLabel[state.state]}{state.detail ? ` · ${state.detail}` : ''}</small></div><div className="connection-actions"><button className="login-link" disabled={state.state === 'checking' || state.state === 'connected'} onClick={() => void login(site)} aria-label={`连接 ${item.label}`}><LogIn size={14}/> {state.state === 'connected' ? '已连接' : state.state === 'checking' ? '自动连接中…' : state.state === 'login_pending' ? '继续验证' : '连接'}</button><button className="check-link" onClick={() => check(site)} disabled={isChecking}>{isChecking ? <RefreshCw size={13} className="spin"/> : <Link2 size={13}/>} 检查连接</button><a href={item.url} target="_blank" rel="noreferrer" aria-label={`打开 ${item.label}`}><ExternalLink size={14}/></a></div></article>
     })}</div>
     <div className="connection-note"><CircleAlert size={15}/><span>桌面版会复用持久化的 HKU 官方会话；首次登录或会话过期时会显示官方窗口完成 2FA。MyHKU 只读取页面上显示的只读字段，密码由桌面版系统安全存储保护。</span></div>
-  </section>
+  </section><LegalSettings /></>
 }
 
 function App() {
@@ -220,7 +221,7 @@ function App() {
   if (!accountConfigured) return <AccountSetup onReady={next => { setAccount(next); setAccountConfigured(true) }} />
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
-      <div className="brand"><div className="brand-mark">▣</div><span>My<span>HKU</span></span><button className="close-nav" onClick={() => setMobileNav(false)}><X size={18}/></button></div>
+      <div className="brand"><img className="brand-mark" src="./brand/logo.svg" alt="MyHKU"/><span>My<span>HKU</span></span><button className="close-nav" onClick={() => setMobileNav(false)}><X size={18}/></button></div>
       <div className="workspace"><span className="workspace-label">当前空间</span><strong>学习空间</strong><ChevronDown size={15}/></div>
       <nav>{navItems.map(({ key, label, icon: Icon }) => <button key={key} className={active === key ? 'active' : ''} onClick={() => { setActive(key); setMobileNav(false) }}><Icon size={18}/><span>{label}</span>{key === 'moodle' && <i className="nav-dot"/>}</button>)}</nav>
       <div className="sidebar-bottom"><div className="login-state"><span className={`state-dot ${dataMode === 'live' && connectedCount === 0 ? 'offline' : ''}`}/> <div><small>HKU 账号</small><strong>{manualConnection?.nativeState === 'needs_2fa' ? '等待身份验证' : Object.values(connections).some(item => item.state === 'checking') ? '正在自动连接 HKU' : accountLabel}</strong></div></div><button className="user-mini"><span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span><span>{account.username || '用户'}</span><ChevronDown size={14}/></button></div>
@@ -423,4 +424,4 @@ function LiveDataPlaceholder({ snapshot, error, connectionPhase, onOpenSettings,
   const dueLive = pending.slice(0, 4)
   return <><section className="stats"><div className="stat-card"><div className="stat-icon blue"><CalendarDays size={18}/></div><div><small>今日课程</small><strong>{classesLive.length} 节</strong></div></div><div className="stat-card"><div className="stat-icon amber"><Clock3 size={18}/></div><div><small>待完成</small><strong>{pending.length} 项</strong></div></div><div className="stat-card"><div className="stat-icon green"><Trophy size={18}/></div><div><small>已获取成绩</small><strong>{snapshot.grades.length} 项</strong></div></div></section><div className="dashboard-grid"><section className="panel schedule"><div className="panel-head"><div><h2>课表</h2><p>来自 SIS 的真实数据</p></div></div><div className="class-list">{classesLive.length ? classesLive.map(item => <article className="class-item" key={item.id}><div className="class-time blue"><strong>{item.start}</strong><span>{item.end}</span></div><div className="class-info"><h3>{item.title}</h3><p>{item.code || '未提供课程代码'} <span>·</span> {item.teacher || '未提供教师'}</p></div><div className="room">{item.room || '未提供地点'}</div></article>) : <p className="empty-state">今天没有课表记录</p>}</div></section><section className="panel deadlines"><div className="panel-head"><div><h2>待办</h2><p>来自 Moodle 的真实数据</p></div></div><div className="due-list">{dueLive.length ? dueLive.map(item => <article className="due-item" key={item.id}><span className="due-check"/><div><h3>{item.title}</h3><p>{item.course}</p></div><time>{item.due || '未提供截止时间'}</time></article>) : <p className="empty-state">暂无未完成待办</p>}</div></section></div></>
 }
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)
+createRoot(document.getElementById('root')!).render(<StrictMode><LegalGate><App /></LegalGate></StrictMode>)

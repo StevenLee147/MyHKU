@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const sourceDirectories = ['src', 'bridge', 'desktop', 'extension', 'scripts', 'docs', '.github', 'android'];
+const sourceDirectories = ['public', 'src', 'bridge', 'desktop', 'extension', 'scripts', 'docs', '.github', 'android'];
 const buildDirectories = ['dist', 'android/app/src/main/assets/dashboard-app'];
 const excludedDirectories = new Set(['node_modules', '.git', '.myhku', '.gradle', 'build']);
 const excludedFiles = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'gradlew', 'gradlew.bat']);

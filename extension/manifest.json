@@ -11,7 +11,9 @@
         "https://hkuportal.hku.hk/*",
         "https://sis-main.hku.hk/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -22,5 +24,11 @@
     "https://sis-main.hku.hk/*",
     "http://127.0.0.1:17321/*"
   ],
-  "permissions": []
+  "permissions": [],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
 }
