@@ -70,7 +70,21 @@ export function todayClasses(snapshot: LiveSnapshot, now = new Date()): LiveClas
     .sort((a, b) => (parseClockMinutes(a.start) ?? 0) - (parseClockMinutes(b.start) ?? 0) || a.start.localeCompare(b.start))
 }
 
-export function baseWeekStartDate(snapshot: LiveSnapshot, now = new Date()): Date {
+export function currentHongKongWeekStart(now = new Date()): Date {
+  const todayIso = hongKongDate(now)
+  const parsed = new Date(`${todayIso}T00:00:00`)
+  const value = Number.isNaN(parsed.getTime()) ? new Date() : parsed
+  value.setHours(0, 0, 0, 0)
+  value.setDate(value.getDate() - value.getDay())
+  return value
+}
+
+export function baseWeekStartDate(
+  snapshot: LiveSnapshot,
+  now = new Date(),
+  options?: { preferCurrentWeek?: boolean },
+): Date {
+  if (options?.preferCurrentWeek) return currentHongKongWeekStart(now)
   const todayIso = hongKongDate(now)
   const todayMatch = snapshot.scheduleWeeks?.find(w => todayIso >= w.start && todayIso <= w.end)
   const raw = todayMatch?.start || snapshot.scheduleWeek?.start || snapshot.schedule.find(item => item.date)?.date

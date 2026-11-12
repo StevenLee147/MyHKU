@@ -73,16 +73,40 @@ app.whenReady().then(async () => {
     assert.equal(empty.schedule.length, 0)
     const legacy = await extract('<p>Week of 20/09/2026-26/09/2026</p>' + weekdays.map((day, index) => `<div class="bkgCalViewWDHeader" style="left:${4 + index * 13}%">${day}</div>`).join('') + '<div class="bkgCalViewItem" style="left:56%">GLIS1903-1A<br>10:00-10:50<br>KK315</div>', 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable')
     assert.equal(legacy.schedule[0].date, '2026-09-24')
+    const prevWeekUrl = 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable?week=0'
     const nextWeekUrl = 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable?week=2'
     const prefetched = await extract(
-      `<p>Week of 20/09/2026-26/09/2026</p><a href="${nextWeekUrl}">Next Week</a><table id="WEEKLY_SCHED_HTMLAREA"><tr><th>Time</th>${weekdays.map(d => `<th>${d}</th>`).join('')}</tr><tr><td>09:00</td><td></td><td>CAES1001-1C3<br>09:00-10:50<br>CPD</td><td></td><td></td><td></td><td></td><td></td></tr></table>`,
+      `<p>Week of 20/09/2026-26/09/2026</p><a href="${prevWeekUrl}">Previous Week</a><a href="${nextWeekUrl}">Next Week</a><table id="WEEKLY_SCHED_HTMLAREA"><tr><th>Time</th>${weekdays.map(d => `<th>${d}</th>`).join('')}</tr><tr><td>09:00</td><td></td><td>CAES1001-1C3<br>09:00-10:50<br>CPD</td><td></td><td></td><td></td><td></td><td></td></tr></table>`,
       'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable',
-      { [nextWeekUrl]: `<p>Week of 27/09/2026-03/10/2026</p><table id="WEEKLY_SCHED_HTMLAREA"><tr><th>Time</th>${weekdays.map(d => `<th>${d}</th>`).join('')}</tr><tr><td>10:00</td><td></td><td></td><td>GLIS1903-1A<br>10:00-11:50<br>KK315</td><td></td><td></td><td></td><td></td></tr></table>` },
+      {
+        [prevWeekUrl]: `<p>Week of 13/09/2026</p><table id="WEEKLY_SCHED_HTMLAREA"><tr><th>Time</th>${weekdays.map(d => `<th>${d}</th>`).join('')}</tr><tr><td>1:30 PM - 3:20 PM</td><td></td><td></td><td></td><td></td><td>FINA1310-2A<br>KK101</td><td></td><td></td></tr></table>`,
+        [nextWeekUrl]: `<p>Week of 27/09/2026-03/10/2026</p><table id="WEEKLY_SCHED_HTMLAREA"><tr><th>Time</th>${weekdays.map(d => `<th>${d}</th>`).join('')}</tr><tr><td>10:00</td><td></td><td></td><td>1:00 PM - 2:50 PM<br>GLIS1903-1A<br>KK315</td><td></td><td></td><td></td><td></td></tr></table>`,
+      },
     )
-    assert.equal(prefetched.scheduleWeeks.length, 2, 'SIS sync prefetches upcoming weeks automatically')
-    assert.equal(prefetched.schedule.length, 2)
-    assert.equal(prefetched.schedule.some(item => item.date === '2026-09-29'), true)
-    console.log('PASS absolute calendar positions, multi-week prefetch and week-range metadata')
+    assert.equal(prefetched.scheduleWeeks.length, 3, 'SIS sync prefetches recent past and upcoming weeks automatically')
+    assert.equal(prefetched.schedule.length, 3)
+    assert.equal(prefetched.schedule.some(item => item.date === '2026-09-17' && item.start === '13:30' && item.end === '15:20'), true, 'single-date Week of header and row-time fallback work')
+    assert.equal(prefetched.schedule.some(item => item.date === '2026-09-29' && item.start === '13:00' && item.end === '14:50' && item.room === 'KK315'), true, 'AM/PM time-before-course format works')
+
+    const partialLoading = await run(`(async (location) => {
+      let payload;
+      const fetch = async (url, options) => {
+        if (String(url).includes('/api/ingest/')) { payload = JSON.parse(options.body); return { ok: true }; }
+        return { ok: false };
+      };
+      Object.defineProperty(document, 'readyState', { configurable: true, get: () => 'loading' });
+      document.body.innerHTML = '<p>Week of 08/11/2026 - 14/11/2026</p>';
+      try {
+        await ${connector};
+      } finally {
+        delete document.readyState;
+      }
+      return payload;
+    })({ href: 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable', hostname: 'sweb.hku.hk', pathname: '/student/servlet/MyWeekly/showTimetable' })`)
+    assert.equal(partialLoading.replaceFields, undefined, 'incomplete SIS load must not wipe cached schedule')
+    assert.equal(partialLoading.scheduleWeek, undefined, 'incomplete SIS load must not mark week range as cached')
+    assert.equal(partialLoading.scheduleWeeks, undefined, 'incomplete SIS load must not mark week ranges as cached')
+    console.log('PASS absolute calendar positions, bidirectional multi-week prefetch, AM/PM + row-time cells, and partial-load guard')
 
     const scheduleModule = stripTypeScriptTypes(readFileSync(new URL('../src/services/schedule.ts', import.meta.url), 'utf8'))
     const { todayClasses } = await import(`data:text/javascript;base64,${Buffer.from(scheduleModule).toString('base64')}`)

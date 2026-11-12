@@ -123,7 +123,7 @@ test('bridge merges schedule by week range without wiping other weeks and wipes 
 })
 
 test('schedule layout splits overlapping classes into side-by-side columns and preserves todayClasses across multi-week snapshots', async () => {
-  const { layoutDayEvents, todayClasses, hongKongGreeting } = await loadTsModule('src/services/schedule.ts')
+  const { layoutDayEvents, todayClasses, hongKongGreeting, currentHongKongWeekStart, baseWeekStartDate, formatIsoLocalDate } = await loadTsModule('src/services/schedule.ts')
 
   const placed = layoutDayEvents([
     { item: { id: 'a', title: 'Lecture', start: '13:30', end: '15:20' }, start: 810, end: 920 },
@@ -160,6 +160,12 @@ test('schedule layout splits overlapping classes into side-by-side columns and p
 
   // 2026-09-23T14:00:00Z is 22:00 HKT -> 晚上好
   assert.equal(hongKongGreeting(new Date('2026-09-23T14:00:00Z')), '晚上好')
+
+  // Live desktop calendar anchors to current Hong Kong Sunday even when cached snapshot only has an old September week.
+  const novNow = new Date('2026-11-12T04:00:00Z')
+  assert.equal(formatIsoLocalDate(currentHongKongWeekStart(novNow)), '2026-11-08')
+  assert.equal(formatIsoLocalDate(baseWeekStartDate(multiWeekSnapshot, novNow, { preferCurrentWeek: true })), '2026-11-08')
+  assert.equal(formatIsoLocalDate(baseWeekStartDate(multiWeekSnapshot, novNow)), '2026-09-27')
 })
 
 test('notifications parse Moodle due strings, suppress baseline spam, and deduplicate 24h/1h reminders', async () => {

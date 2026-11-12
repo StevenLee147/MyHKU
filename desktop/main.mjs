@@ -219,6 +219,7 @@ function attachConnector(win, record) {
   let busy = null
   let proof = null
   let published = false
+  let publishedFinal = false
   let resumedService = false
   let allowCredentials = true
   let lastInspection = ''
@@ -230,6 +231,7 @@ function attachConnector(win, record) {
     busy = null
     proof = null
     published = false
+    publishedFinal = false
     clearTimeout(confirmationTimer)
   }
   const requireManual = (state, detail) => {
@@ -302,8 +304,10 @@ function attachConnector(win, record) {
           await win.loadURL(SERVICE_URLS.sis)
           return
         }
-        if (!published) {
+        const finishedLoading = !win.webContents.isLoading()
+        if (!published || (finishedLoading && !publishedFinal)) {
           published = true
+          if (finishedLoading) publishedFinal = true
           void publishPage(mainFrame)
           for (const frame of serviceFrames(win, record?.site || serviceForUrl(current))) void publishPage(frame)
         }
@@ -390,6 +394,7 @@ function attachConnector(win, record) {
   win.webContents.on('did-navigate', () => { documentReady = true; void check() })
   win.webContents.on('dom-ready', () => { documentReady = true; void check() })
   win.webContents.on('did-navigate-in-page', () => { void check() })
+  win.webContents.on('did-finish-load', () => { documentReady = true; void check() })
   win.webContents.on('did-stop-loading', () => { documentReady = true; void check() })
   win.webContents.on('did-frame-finish-load', (_event, mainFrame, processId, routingId) => {
     void check()
@@ -713,25 +718,65 @@ handleDashboard('myhku-reveal-downloaded-file', async (_event, targetPath) => {
   return true
 })
 
-handleDashboard('myhku-schedule-week', async (_event, rawOffset) => {
-  const offset = Math.max(-1, Math.min(1, Number(rawOffset) || 0))
-  const record = auth.request('sis')
-  const sisWindow = record.window
-  if (!sisWindow || sisWindow.isDestroyed() || record.state !== 'connected') {
-    throw new Error('SIS 正在自动连接，完成后即可切换周次')
+async function waitForSisIdle(sisWindow, timeoutMs = 15_000) {
+  if (!sisWindow || sisWindow.isDestroyed() || !sisWindow.webContents.isLoading()) return
+  await new Promise(resolve => {
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      sisWindow.webContents.removeListener('did-stop-loading', done)
+      sisWindow.webContents.removeListener('did-finish-load', done)
+      resolve()
+    }
+    const timer = setTimeout(done, timeoutMs)
+    sisWindow.webContents.once('did-stop-loading', done)
+    sisWindow.webContents.once('did-finish-load', done)
+  })
+}
+
+async function publishSisWindow(sisWindow) {
+  if (!sisWindow || sisWindow.isDestroyed()) return
+  const activeFrames = [sisWindow.webContents.mainFrame, ...serviceFrames(sisWindow, 'sis')]
+  for (const frame of activeFrames) {
+    if (frame && isAllowedUrl(frame.url)) await publishPage(frame)
   }
-  if (sisWindow.webContents.isLoading()) {
-    await new Promise(resolve => {
-      const timer = setTimeout(resolve, 15_000)
-      sisWindow.webContents.once('did-finish-load', () => { clearTimeout(timer); resolve() })
-    })
+  notifyDashboard()
+}
+
+async function readRenderedSisWeekStart(sisWindow) {
+  if (!sisWindow || sisWindow.isDestroyed()) return null
+  const weekScript = `(() => {
+    const iso = (d, m, y) => \`\${y}-\${String(m).padStart(2, '0')}-\${String(d).padStart(2, '0')}\`
+    const scan = (root, seen = new Set()) => {
+      if (!root || seen.has(root)) return null
+      seen.add(root)
+      const raw = String(root.body?.textContent || root.documentElement?.textContent || '')
+      const dmy = raw.match(/Week\\s+of\\s+(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/i)
+      if (dmy) return iso(Number(dmy[1]), Number(dmy[2]), Number(dmy[3]))
+      const ymd = raw.match(/Week\\s+of\\s+(\\d{4}-\\d{2}-\\d{2})/i)
+      if (ymd) return ymd[1]
+      for (const frame of Array.from(root.querySelectorAll?.('iframe, frame') || [])) {
+        try { const hit = scan(frame.contentDocument, seen); if (hit) return hit } catch {}
+      }
+      return null
+    }
+    return scan(document)
+  })()`
+  const framesToTry = [sisWindow.webContents.mainFrame, ...serviceFrames(sisWindow, 'sis')]
+  for (const frame of framesToTry) {
+    try {
+      const hit = await frame.executeJavaScript(weekScript, true)
+      if (typeof hit === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(hit)) return hit
+    } catch { /* try next frame */ }
   }
-  if (offset === 0) {
-    await sisWindow.loadURL(SERVICE_URLS.sis)
-    return true
-  }
-  const control = offset > 0 ? 'DERIVED_CLASS_S_SSR_NEXT_WEEK' : 'DERIVED_CLASS_S_SSR_PREV_WEEK'
-  const patternSource = offset > 0 ? 'next\\s*week|下一?周|下週|next\\s*7' : 'prev(?:ious)?\\s*week|上一?周|上週|prev\\s*7'
+  return null
+}
+
+async function stepSisWeekOnce(sisWindow, direction, previousWeekStart) {
+  const control = direction > 0 ? 'DERIVED_CLASS_S_SSR_NEXT_WEEK' : 'DERIVED_CLASS_S_SSR_PREV_WEEK'
+  const patternSource = direction > 0 ? 'next\\s*week|下一?周|下週|next\\s*7' : 'prev(?:ious)?\\s*week|上一?周|上週|prev\\s*7'
   const clickScript = `(() => {
     const pattern = new RegExp(${JSON.stringify(patternSource)}, 'i')
     const docs = [document]
@@ -748,22 +793,84 @@ handleDashboard('myhku-schedule-week', async (_event, rawOffset) => {
     }
     return false
   })()`
-  const framesToTry = [sisWindow.webContents.mainFrame, ...serviceFrames(sisWindow, 'sis')]
-  let clicked = false
-  for (const frame of framesToTry) {
-    try {
-      if (await frame.executeJavaScript(clickScript, true)) { clicked = true; break }
-    } catch { /* try next frame */ }
-  }
-  if (!clicked) throw new Error('当前 SIS 页面未找到上/下周切换按钮')
-  setTimeout(() => {
-    if (sisWindow.isDestroyed()) return
-    const activeFrames = [sisWindow.webContents.mainFrame, ...serviceFrames(sisWindow, 'sis')]
-    for (const frame of activeFrames) {
-      if (frame && isAllowedUrl(frame.url)) void publishPage(frame)
+  let navStarted = false
+  const onStartNav = () => { navStarted = true }
+  sisWindow.webContents.on('did-start-navigation', onStartNav)
+  try {
+    const framesToTry = [sisWindow.webContents.mainFrame, ...serviceFrames(sisWindow, 'sis')]
+    let clicked = false
+    for (const frame of framesToTry) {
+      try {
+        if (await frame.executeJavaScript(clickScript, true)) { clicked = true; break }
+      } catch { /* try next frame */ }
     }
-    setTimeout(() => notifyDashboard(), 1500)
-  }, 1200)
+    if (!clicked) throw new Error('当前 SIS 页面未找到上/下周切换按钮')
+    const deadline = Date.now() + 12_000
+    await new Promise(resolve => setTimeout(resolve, 250))
+    while (!sisWindow.isDestroyed() && Date.now() < deadline) {
+      if (sisWindow.webContents.isLoading()) {
+        await waitForSisIdle(sisWindow, Math.max(500, deadline - Date.now()))
+        break
+      }
+      if (navStarted) break
+      const currentWeek = await readRenderedSisWeekStart(sisWindow)
+      if (previousWeekStart && currentWeek && currentWeek !== previousWeekStart) break
+      await new Promise(resolve => setTimeout(resolve, 150))
+    }
+    await waitForSisIdle(sisWindow, 5_000)
+  } finally {
+    if (!sisWindow.isDestroyed()) sisWindow.webContents.removeListener('did-start-navigation', onStartNav)
+  }
+}
+
+handleDashboard('myhku-schedule-week', async (_event, rawRequest) => {
+  const rawOffset = rawRequest && typeof rawRequest === 'object' ? rawRequest.offset : rawRequest
+  const targetStartIso = rawRequest && typeof rawRequest === 'object' && typeof rawRequest.targetStartIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawRequest.targetStartIso)
+    ? rawRequest.targetStartIso
+    : ''
+  const offset = Math.max(-1, Math.min(1, Number(rawOffset) || 0))
+  const record = auth.request('sis')
+  const sisWindow = record.window
+  if (!sisWindow || sisWindow.isDestroyed() || record.state !== 'connected') {
+    throw new Error('SIS 正在自动连接，完成后即可切换周次')
+  }
+  await waitForSisIdle(sisWindow)
+  if (offset === 0 && !targetStartIso) {
+    await sisWindow.loadURL(SERVICE_URLS.sis)
+    await waitForSisIdle(sisWindow)
+    await publishSisWindow(sisWindow)
+    return true
+  }
+  if (offset === 0 && !sisWindow.webContents.getURL().includes('/MyWeekly/showTimetable')) {
+    await sisWindow.loadURL(SERVICE_URLS.sis)
+    await waitForSisIdle(sisWindow)
+  }
+  let currentWeekStart = await readRenderedSisWeekStart(sisWindow)
+  if (targetStartIso && currentWeekStart === targetStartIso) {
+    await publishSisWindow(sisWindow)
+    return true
+  }
+  if (targetStartIso && currentWeekStart) {
+    const maxSteps = 8
+    for (let step = 0; step < maxSteps && currentWeekStart && currentWeekStart !== targetStartIso; step++) {
+      const direction = targetStartIso > currentWeekStart ? 1 : -1
+      await stepSisWeekOnce(sisWindow, direction, currentWeekStart)
+      await publishSisWindow(sisWindow)
+      const nextWeekStart = await readRenderedSisWeekStart(sisWindow)
+      if (!nextWeekStart || nextWeekStart === currentWeekStart) break
+      if ((direction > 0 && nextWeekStart > targetStartIso) || (direction < 0 && nextWeekStart < targetStartIso)) break
+      currentWeekStart = nextWeekStart
+    }
+    return true
+  }
+  if (offset === 0) {
+    await sisWindow.loadURL(SERVICE_URLS.sis)
+    await waitForSisIdle(sisWindow)
+    await publishSisWindow(sisWindow)
+    return true
+  }
+  await stepSisWeekOnce(sisWindow, offset, currentWeekStart)
+  await publishSisWindow(sisWindow)
   return true
 })
 

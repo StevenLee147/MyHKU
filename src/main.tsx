@@ -620,8 +620,11 @@ function App() {
             (activeSnapshot ? (
               <CalendarPage
                 snapshot={activeSnapshot}
+                dataMode={dataMode}
+                sisConnected={connections.sis.state === 'connected'}
                 query={query}
                 onRefresh={() => sync()}
+                onSyncSnapshot={() => sync(false)}
                 onNotice={msg => showToast(msg, 4000)}
               />
             ) : (

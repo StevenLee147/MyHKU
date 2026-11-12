@@ -330,19 +330,77 @@
     }
   }
 
+  function normalizeClock(value) {
+    const match = clean(value).match(/(\d{1,2})(?::|：)(\d{2})\s*(AM|PM)?/i)
+    if (!match) return ''
+    let hour = Number(match[1])
+    const minute = Number(match[2])
+    const suffix = match[3]?.toUpperCase()
+    if (suffix === 'PM' && hour < 12) hour += 12
+    if (suffix === 'AM' && hour === 12) hour = 0
+    if (hour > 23 || minute > 59) return ''
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+  }
+
+  function addMinutesClock(clock, delta) {
+    const match = String(clock || '').match(/^(\d{2}):(\d{2})$/)
+    if (!match) return ''
+    const total = Number(match[1]) * 60 + Number(match[2]) + delta
+    if (total < 0 || total >= 24 * 60) return ''
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+  }
+
   function timePair(value) {
     const matches = clean(value).match(/\b\d{1,2}(?::|：)\d{2}\s*(?:AM|PM)?\b/gi) || []
-    return { start: (matches[0] || '').replace('：', ':'), end: (matches[1] || '').replace('：', ':') }
+    return { start: normalizeClock(matches[0] || ''), end: normalizeClock(matches[1] || '') }
+  }
+
+  function plusDaysIso(iso, days) {
+    const date = new Date(`${iso}T00:00:00Z`)
+    if (Number.isNaN(date.getTime())) return iso
+    date.setUTCDate(date.getUTCDate() + days)
+    return date.toISOString().slice(0, 10)
   }
 
   function extractWeekRange(rootDocument = document, seen = new Set()) {
     if (!rootDocument || seen.has(rootDocument)) return undefined
     seen.add(rootDocument)
+    const iso = (day, month, year) => `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
     const raw = String(rootDocument.body?.textContent || rootDocument.documentElement?.textContent || '')
-    const match = raw.match(/Week\s+of\s+(\d{1,2})\/(\d{1,2})\/(\d{4})\s*[-–]\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i)
-    if (match) {
-      const iso = (day, month, year) => `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-      return { start: iso(Number(match[1]), Number(match[2]), Number(match[3])), end: iso(Number(match[4]), Number(match[5]), Number(match[6])) }
+    const fullDmy = raw.match(/Week\s+of\s+(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(?:[-–—~]+|to)\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i)
+    if (fullDmy) {
+      return { start: iso(Number(fullDmy[1]), Number(fullDmy[2]), Number(fullDmy[3])), end: iso(Number(fullDmy[4]), Number(fullDmy[5]), Number(fullDmy[6])) }
+    }
+    const fullIso = raw.match(/Week\s+of\s+(\d{4}-\d{2}-\d{2})\s*(?:[-–—~]+|to)\s*(\d{4}-\d{2}-\d{2})/i)
+    if (fullIso) {
+      return { start: fullIso[1], end: fullIso[2] }
+    }
+    const singleDmy = raw.match(/Week\s+of\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/i)
+    if (singleDmy) {
+      const start = iso(Number(singleDmy[1]), Number(singleDmy[2]), Number(singleDmy[3]))
+      return { start, end: plusDaysIso(start, 6) }
+    }
+    const singleIso = raw.match(/Week\s+of\s+(\d{4}-\d{2}-\d{2})/i)
+    if (singleIso) {
+      return { start: singleIso[1], end: plusDaysIso(singleIso[1], 6) }
+    }
+    const headerDates = Array.from(rootDocument.querySelectorAll?.('th, .bkgCalViewWDHeader, .bkgCalViewwdheader') || [])
+      .map(node => {
+        const label = clean(node.textContent)
+        const dmy = label.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/)
+        if (dmy) return iso(Number(dmy[1]), Number(dmy[2]), Number(dmy[3]))
+        const ymd = label.match(/\b(\d{4}-\d{2}-\d{2})\b/)
+        return ymd ? ymd[1] : ''
+      })
+      .filter(Boolean)
+      .sort()
+    if (headerDates.length >= 2) {
+      const first = new Date(`${headerDates[0]}T00:00:00Z`)
+      if (!Number.isNaN(first.getTime())) {
+        first.setUTCDate(first.getUTCDate() - first.getUTCDay())
+        const start = first.toISOString().slice(0, 10)
+        return { start, end: plusDaysIso(start, 6) }
+      }
     }
     for (const frame of Array.from(rootDocument.querySelectorAll?.('iframe, frame') || [])) {
       try {
@@ -365,25 +423,55 @@
       return ['日', '一', '二', '三', '四', '五', '六'].findIndex(day => raw.includes(`星期${day}`) || raw.includes(`周${day}`))
     }
     const dated = day => {
-      const match = clean(day).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+      const cleaned = clean(day)
+      const ymd = cleaned.match(/\b(\d{4}-\d{2}-\d{2})\b/)
+      if (ymd) return ymd[1]
+      const match = cleaned.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
       if (match) return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`
-      const index = weekday(day)
+      const index = weekday(cleaned)
       if (!week || index < 0) return undefined
       const date = new Date(`${week.start}T00:00:00Z`)
       date.setUTCDate(date.getUTCDate() + (index - date.getUTCDay() + 7) % 7)
       return date.toISOString().slice(0, 10)
     }
-    const add = (node, day) => {
+    const add = (node, day, fallbackTimes) => {
       const raw = String(node.innerHTML || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ')
-      const times = raw.match(/(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})/)
-      if (!times) return
-      const title = clean(raw.slice(0, times.index)).replace(/\s*--\s*$/, '')
-      if (!codeFrom(title)) return
-      const room = clean(raw.slice(times.index + times[0].length)).replace(/^--$/, '')
+      const times = raw.match(/(\d{1,2}(?::|：)\d{2}\s*(?:AM|PM)?)\s*(?:[-–—~]+|to)\s*(\d{1,2}(?::|：)\d{2}\s*(?:AM|PM)?)/i)
+      let start = ''
+      let end = ''
+      let title = ''
+      let room = ''
+      if (times) {
+        start = normalizeClock(times[1])
+        end = normalizeClock(times[2])
+        const before = clean(raw.slice(0, times.index)).replace(/\s*--\s*$/, '')
+        const afterRaw = raw.slice(times.index + times[0].length)
+        const after = clean(afterRaw).replace(/^--\s*/, '').replace(/\s*--$/, '')
+        if (codeFrom(before)) {
+          title = before
+          room = after
+        } else if (codeFrom(after)) {
+          const lines = afterRaw.split(/\n+/).map(line => clean(line).replace(/^--\s*|\s*--$/g, '')).filter(Boolean)
+          const codeIdx = lines.findIndex(line => Boolean(codeFrom(line)))
+          title = codeIdx >= 0 ? lines[codeIdx] : after
+          room = lines.filter((_, idx) => idx !== codeIdx).join(' ')
+        }
+      } else if (fallbackTimes?.start && fallbackTimes?.end) {
+        const lines = raw.split(/\n+/).map(line => clean(line).replace(/^--\s*|\s*--$/g, '')).filter(Boolean)
+        const codeIdx = lines.findIndex(line => Boolean(codeFrom(line)))
+        if (codeIdx >= 0) {
+          start = fallbackTimes.start
+          end = fallbackTimes.end
+          title = lines[codeIdx]
+          room = lines.filter((_, idx) => idx !== codeIdx).join(' ')
+        }
+      }
+      if (!start || !end || !title || !codeFrom(title)) return
       const date = dated(day)
-      const id = `meeting-${date || day}-${title}-${times[1]}-${times[2]}`
-      if (!schedule.some(item => item.id === id)) schedule.push({ id, title, code: codeFrom(title), day, ...(date ? { date } : {}), start: times[1], end: times[2], ...(room ? { room } : {}) })
+      const id = `meeting-${date || day}-${title}-${start}-${end}`
+      if (!schedule.some(item => item.id === id)) schedule.push({ id, title, code: codeFrom(title), day, ...(date ? { date } : {}), start, end, ...(room ? { room } : {}) })
     }
+
     // cellIndex ignores earlier rowspans. Reconstruct the logical grid first.
     rootDocument.querySelectorAll('table').forEach(table => {
       const matrix = []; const origins = []
@@ -397,13 +485,22 @@
             matrix[y] ||= []
             for (let x = c; x < c + (cell.colSpan || 1); x++) matrix[y][x] = cell
           }
-          origins.push({ cell, r, c }); c += cell.colSpan || 1
+          origins.push({ cell, r, c, height }); c += cell.colSpan || 1
         })
       })
       const headerRow = matrix.findIndex(row => row.filter(cell => weekday(cell?.textContent) >= 0).length >= 5)
       if (headerRow < 0) return
       const headers = matrix[headerRow].map(cell => clean(cell?.textContent))
-      for (const { cell, r, c } of origins) if (r > headerRow && weekday(headers[c]) >= 0) add(cell, headers[c])
+      const rowSlot = rowIndex => timePair(matrix[rowIndex]?.[0]?.textContent || '')
+      for (const { cell, r, c, height } of origins) {
+        if (r <= headerRow || weekday(headers[c]) < 0) continue
+        const firstSlot = rowSlot(r)
+        const lastSlot = rowSlot(r + height - 1)
+        const nextSlot = rowSlot(r + height)
+        const fallbackStart = firstSlot.start
+        const fallbackEnd = lastSlot.end || nextSlot.start || (fallbackStart ? addMinutesClock(fallbackStart, height * 60 - 10) : '')
+        add(cell, headers[c], fallbackStart && fallbackEnd ? { start: fallbackStart, end: fallbackEnd } : undefined)
+      }
     })
     if (!schedule.length) {
       const headers = Array.from(rootDocument.querySelectorAll('.bkgCalViewWDHeader, .bkgCalViewwdheader'))
@@ -458,8 +555,8 @@
       })
     })
     // The top PeopleSoft shell contains the actual timetable in a same-origin
-    // iframe. Inspect loaded iframe documents without reading any credentials.
-    rootDocument.querySelectorAll('iframe').forEach((frame) => {
+    // iframe or frame. Inspect loaded child documents without reading any credentials.
+    rootDocument.querySelectorAll('iframe, frame').forEach((frame) => {
       try {
         const nested = frame.contentDocument
         for (const item of extractSis(nested, seenDocuments)) if (!schedule.some((entry) => entry.id === item.id)) schedule.push(item)
@@ -488,20 +585,23 @@
     return merged
   }
 
-  function findNextWeekRequests(doc, baseUrl) {
+  function findWeekNavRequests(doc, baseUrl, direction = 'next') {
+    const pattern = direction === 'prev'
+      ? /(?:prev(?:ious)?\s*week|上一?周|上週|prev\s*7|prior\s*week)/i
+      : /(?:next\s*week|下一?周|下週|next\s*7|forward)/i
     const results = []
     const collect = (root, seen = new Set()) => {
       if (!root || seen.has(root)) return
       seen.add(root)
       for (const link of Array.from(root.querySelectorAll?.('a[href]') || [])) {
         const label = `${clean(link.textContent)} ${clean(link.getAttribute('title'))} ${clean(link.getAttribute('aria-label'))}`
-        if (!/(?:next\s*week|下一?周|下週|next\s*7|forward)/i.test(label)) continue
+        if (!pattern.test(label)) continue
         const href = pageHref(link, baseUrl)
         if (href) results.push({ url: href, method: 'GET' })
       }
       for (const btn of Array.from(root.querySelectorAll?.('button[onclick], input[onclick]') || [])) {
         const label = `${clean(btn.textContent)} ${clean(btn.getAttribute('value'))} ${clean(btn.getAttribute('title'))} ${clean(btn.getAttribute('aria-label'))}`
-        if (!/(?:next\s*week|下一?周|下週)/i.test(label)) continue
+        if (!pattern.test(label)) continue
         const onclick = btn.getAttribute('onclick') || ''
         const urlMatch = onclick.match(/(?:location(?:\.href)?\s*=\s*|window\.open\(\s*)['"]([^'"]+)['"]/i)
         if (urlMatch) {
@@ -517,7 +617,7 @@
         const method = String(form.getAttribute('method') || 'GET').toUpperCase()
         if (method !== 'GET') continue
         const submitter = Array.from(form.querySelectorAll('button, input[type="submit"], input[type="button"]'))
-          .find(node => /(?:next\s*week|下一?周|下週)/i.test(`${clean(node.textContent)} ${clean(node.getAttribute('value'))} ${clean(node.getAttribute('aria-label'))}`))
+          .find(node => pattern.test(`${clean(node.textContent)} ${clean(node.getAttribute('value'))} ${clean(node.getAttribute('aria-label'))}`))
         if (!submitter) continue
         const actionHref = pageHref(form, baseUrl)
         if (!actionHref) continue
@@ -541,39 +641,54 @@
     return results
   }
 
-  // Prefetch the current week plus up to 4 upcoming weeks when SIS/MyWeekly
-  // exposes stateless GET next-week links, so multi-week browsing works offline
-  // without overwriting other weeks in the bridge.
+  function documentsComplete(rootDocument = document, seen = new Set()) {
+    if (!rootDocument || seen.has(rootDocument)) return true
+    seen.add(rootDocument)
+    if (rootDocument.readyState && rootDocument.readyState !== 'complete') return false
+    for (const frame of Array.from(rootDocument.querySelectorAll?.('iframe, frame') || [])) {
+      try {
+        if (frame.contentDocument && !documentsComplete(frame.contentDocument, seen)) return false
+      } catch (_) { /* cross-origin frame */ }
+    }
+    return true
+  }
+
+  // Prefetch the current week plus up to 2 recent weeks and 4 upcoming weeks when
+  // SIS/MyWeekly exposes stateless GET week links, so multi-week browsing works
+  // offline without overwriting other weeks in the bridge.
   async function prefetchSisWeeks() {
     const merged = extractSis(document)
     const initialWeek = extractWeekRange(document)
     const weeksMap = new Map()
     if (initialWeek) weeksMap.set(`${initialWeek.start}..${initialWeek.end}`, initialWeek)
     const seenUrls = new Set([location.href])
-    let frontier = findNextWeekRequests(document, location.href)
-    const MAX_FUTURE_WEEKS = 4
-    let step = 0
-    while (frontier.length && step < MAX_FUTURE_WEEKS) {
-      const nextReq = frontier.find(item => item.url && !seenUrls.has(item.url))
-      if (!nextReq) break
-      seenUrls.add(nextReq.url)
-      step += 1
-      try {
-        const response = await fetch(nextReq.url, { credentials: 'include', method: nextReq.method || 'GET' })
-        if (!response.ok) break
-        const html = await response.text()
-        const doc = new DOMParser().parseFromString(html, 'text/html')
-        if (doc.querySelector('input[type="password"]')) break
-        const week = extractWeekRange(doc)
-        if (week) weeksMap.set(`${week.start}..${week.end}`, week)
-        for (const item of extractSis(doc)) {
-          if (!merged.some(existing => existing.id === item.id)) merged.push(item)
+    const crawlDirection = async (direction, maxSteps) => {
+      let frontier = findWeekNavRequests(document, location.href, direction)
+      let step = 0
+      while (frontier.length && step < maxSteps) {
+        const nextReq = frontier.find(item => item.url && !seenUrls.has(item.url))
+        if (!nextReq) break
+        seenUrls.add(nextReq.url)
+        step += 1
+        try {
+          const response = await fetch(nextReq.url, { credentials: 'include', method: nextReq.method || 'GET' })
+          if (!response.ok) break
+          const html = await response.text()
+          const doc = new DOMParser().parseFromString(html, 'text/html')
+          if (doc.querySelector('input[type="password"]')) break
+          const week = extractWeekRange(doc)
+          if (week) weeksMap.set(`${week.start}..${week.end}`, week)
+          for (const item of extractSis(doc)) {
+            if (!merged.some(existing => existing.id === item.id)) merged.push(item)
+          }
+          frontier = findWeekNavRequests(doc, nextReq.url, direction)
+        } catch (_) {
+          break
         }
-        frontier = findNextWeekRequests(doc, nextReq.url)
-      } catch (_) {
-        break
       }
     }
+    await crawlDirection('next', 4)
+    await crawlDirection('prev', 2)
     const scheduleWeeks = Array.from(weeksMap.values()).sort((a, b) => a.start.localeCompare(b.start))
     return {
       schedule: merged,
@@ -619,7 +734,12 @@
     const fields = Object.fromEntries(Object.entries(data).filter(([key, value]) =>
       (key !== 'completeCrawl' && Array.isArray(value)) ||
       (key === 'scheduleWeek' && value && typeof value === 'object')))
-    if (site === 'sis' && Array.isArray(fields.schedule) && (fields.schedule.length > 0 || fields.scheduleWeek || (Array.isArray(fields.scheduleWeeks) && fields.scheduleWeeks.length > 0))) {
+    const sisComplete = documentsComplete()
+    if (site === 'sis' && !sisComplete && (!Array.isArray(fields.schedule) || fields.schedule.length === 0)) {
+      delete fields.scheduleWeek
+      delete fields.scheduleWeeks
+    }
+    if (site === 'sis' && Array.isArray(fields.schedule) && (fields.schedule.length > 0 || (sisComplete && (fields.scheduleWeek || (Array.isArray(fields.scheduleWeeks) && fields.scheduleWeeks.length > 0))))) {
       fields.replaceFields = ['schedule']
     } else if (site === 'moodle' && /^\/my(?:\/|$)/i.test(location.pathname) && Array.isArray(fields.courses) && fields.courses.length > 0) {
       fields.replaceFields = data.completeCrawl

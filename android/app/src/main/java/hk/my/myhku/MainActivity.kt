@@ -351,6 +351,9 @@ class MainActivity : AppCompatActivity() {
     private fun mergeSisPayload(previousRaw: String?, incoming: JSONObject): JSONObject {
         if (previousRaw.isNullOrBlank() || !incoming.optBoolean("connected", false)) return incoming
         val previous = runCatching { JSONObject(previousRaw) }.getOrNull() ?: return incoming
+        val replaceSchedule = incoming.optJSONArray("replaceFields")?.let { arr ->
+            (0 until arr.length()).any { arr.optString(it) == "schedule" }
+        } ?: false
         val incomingWeeks = mutableListOf<Pair<String, String>>()
         incoming.optJSONArray("scheduleWeeks")?.let { arr ->
             for (i in 0 until arr.length()) {
@@ -365,15 +368,15 @@ class MainActivity : AppCompatActivity() {
                 incomingWeeks.add(s to e)
             }
         }
-        if (incomingWeeks.isEmpty()) return incoming
+        if (replaceSchedule && incomingWeeks.isEmpty()) return incoming
         val mergedSchedule = JSONArray()
         val seenIds = mutableSetOf<String>()
         previous.optJSONArray("schedule")?.let { prevArr ->
             for (i in 0 until prevArr.length()) {
                 val item = prevArr.optJSONObject(i) ?: continue
                 val date = item.optString("date", "").take(10)
-                val inIncoming = date.length == 10 && incomingWeeks.any { (start, end) -> date >= start && date <= end }
-                if (date.length == 10 && !inIncoming) {
+                val inIncoming = replaceSchedule && date.length == 10 && incomingWeeks.any { (start, end) -> date >= start && date <= end }
+                if (!replaceSchedule || (date.length == 10 && !inIncoming)) {
                     val id = item.optString("id", "")
                     if (id.isEmpty() || seenIds.add(id)) mergedSchedule.put(item)
                 }
@@ -396,10 +399,15 @@ class MainActivity : AppCompatActivity() {
             }
         }
         incomingWeeks.forEach { (s, e) -> weeksMap.putIfAbsent("$s..$e", JSONObject().put("start", s).put("end", e)) }
-        val mergedWeeks = JSONArray()
-        weeksMap.entries.sortedBy { it.key }.forEach { mergedWeeks.put(it.value) }
+        if (!incoming.has("scheduleWeek")) {
+            previous.optJSONObject("scheduleWeek")?.let { incoming.put("scheduleWeek", it) }
+        }
+        if (weeksMap.isNotEmpty()) {
+            val mergedWeeks = JSONArray()
+            weeksMap.entries.sortedBy { it.key }.forEach { mergedWeeks.put(it.value) }
+            incoming.put("scheduleWeeks", mergedWeeks)
+        }
         incoming.put("schedule", mergedSchedule)
-        incoming.put("scheduleWeeks", mergedWeeks)
         return incoming
     }
 

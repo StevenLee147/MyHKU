@@ -21,7 +21,15 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
   }),
   beginLogin: (show = true) => ipcRenderer.invoke('myhku-begin-login', Boolean(show)),
   clearAccount: () => ipcRenderer.invoke('myhku-clear-account'),
-  changeScheduleWeek: (offset) => ipcRenderer.invoke('myhku-schedule-week', Number(offset) || 0),
+  changeScheduleWeek: (request) => ipcRenderer.invoke(
+    'myhku-schedule-week',
+    request && typeof request === 'object'
+      ? {
+          offset: Number(request.offset) || 0,
+          ...(typeof request.targetStartIso === 'string' ? { targetStartIso: request.targetStartIso } : {}),
+        }
+      : Number(request) || 0,
+  ),
   onHkuUpdated: (listener) => {
     if (typeof listener !== 'function') return () => {}
     const handler = (_event, payload) => listener(payload)

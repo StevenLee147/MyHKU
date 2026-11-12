@@ -1,8 +1,9 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
-import type { LiveSnapshot } from '../services/hku'
+import type { DataMode, LiveSnapshot } from '../services/hku'
 import {
   baseWeekStartDate,
+  currentHongKongWeekStart,
   formatIsoLocalDate,
   hongKongDate,
   isWeekRangeCached,
@@ -40,19 +41,36 @@ function scheduleDayIndex(item: LiveSnapshot['schedule'][number], weekStart: Dat
 
 export function CalendarPage({
   snapshot,
+  dataMode = 'live',
+  sisConnected = false,
   query,
   onRefresh,
+  onSyncSnapshot,
   onNotice,
 }: {
   snapshot: LiveSnapshot
+  dataMode?: DataMode
+  sisConnected?: boolean
   query: string
   onRefresh: () => void
+  onSyncSnapshot?: () => void
   onNotice: (message: string) => void
 }) {
   const [weekOffset, setWeekOffset] = useState(0)
   const [loadingWeek, setLoadingWeek] = useState<number | null>(null)
-
-  const baseStart = useMemo(() => baseWeekStartDate(snapshot), [snapshot])
+  const autoSyncedWeekRef = useRef<string | null>(null)
+  const frozenBaseRef = useRef<Date | null>(null)
+  const liveDesktopSync = dataMode === 'live' && Boolean(window.myhkuDesktop?.changeScheduleWeek)
+  const todayHkIso = hongKongDate()
+  const baseStart = useMemo(() => {
+    if (liveDesktopSync) return currentHongKongWeekStart()
+    if (weekOffset === 0 || !frozenBaseRef.current) {
+      const next = baseWeekStartDate(snapshot)
+      frozenBaseRef.current = next
+      return next
+    }
+    return frozenBaseRef.current
+  }, [liveDesktopSync, snapshot, todayHkIso, weekOffset])
   const weekStart = useMemo(() => addDays(baseStart, weekOffset * 7), [baseStart, weekOffset])
   const weekEnd = useMemo(() => addDays(weekStart, 6), [weekStart])
   const weekStartIso = formatIsoLocalDate(weekStart)
@@ -99,6 +117,31 @@ export function CalendarPage({
     }
   }, [days, filteredSchedule, snapshot.scheduleWeek?.start, weekStart, weekStartIso, weekEndIso, activeRange])
 
+  const syncTargetWeek = async (delta: number, targetStartIso: string) => {
+    const change = liveDesktopSync ? window.myhkuDesktop?.changeScheduleWeek : undefined
+    if (!change) return
+    setLoadingWeek(delta)
+    try {
+      await change({
+        offset: delta === 0 ? 0 : delta > 0 ? 1 : -1,
+        targetStartIso,
+      })
+      onSyncSnapshot?.()
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '切换课表周次失败，显示已缓存范围')
+    } finally {
+      setLoadingWeek(null)
+    }
+  }
+
+  useEffect(() => {
+    if (!liveDesktopSync || !sisConnected || weekOffset !== 0 || loadingWeek !== null) return
+    if (isWeekRangeCached(snapshot, weekStartIso, weekEndIso)) return
+    if (autoSyncedWeekRef.current === weekStartIso) return
+    autoSyncedWeekRef.current = weekStartIso
+    void syncTargetWeek(0, weekStartIso)
+  }, [liveDesktopSync, sisConnected, weekOffset, loadingWeek, snapshot, weekStartIso, weekEndIso])
+
   const moveWeek = async (delta: number) => {
     const targetOffset = delta === 0 ? 0 : weekOffset + delta
     const targetStart = addDays(baseStart, targetOffset * 7)
@@ -110,16 +153,7 @@ export function CalendarPage({
     if (isWeekRangeCached(snapshot, targetStartIso, targetEndIso)) {
       return
     }
-    const change = window.myhkuDesktop?.changeScheduleWeek
-    if (!change) return
-    setLoadingWeek(delta)
-    try {
-      await change(delta === 0 ? 0 : delta > 0 ? 1 : -1)
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : '切换课表周次失败，显示已缓存范围')
-    } finally {
-      setLoadingWeek(null)
-    }
+    await syncTargetWeek(delta, targetStartIso)
   }
 
   const formatDay = (day: Date) =>

@@ -19,7 +19,7 @@ interface Window {
     saveAccount?: (value: { localUsername: string; email: string; password: string }) => Promise<{ configured: boolean; localUsername?: string; email?: string }>
     beginLogin?: (show?: boolean) => Promise<unknown>
     clearAccount?: () => Promise<unknown>
-    changeScheduleWeek?: (offset: number) => Promise<unknown>
+    changeScheduleWeek?: (request: number | { offset: number; targetStartIso?: string }) => Promise<unknown>
     onHkuUpdated?: (listener: (payload?: { site?: string; fetchedAt?: string; at?: string }) => void) => () => void
     onAuthStatus?: (listener: (payload?: { state?: string; configured?: boolean; url?: string; detail?: string; requires2fa?: boolean; sessions?: DesktopSessions }) => void) => () => void
   }
