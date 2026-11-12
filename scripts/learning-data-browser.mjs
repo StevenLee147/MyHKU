@@ -73,7 +73,16 @@ app.whenReady().then(async () => {
     assert.equal(empty.schedule.length, 0)
     const legacy = await extract('<p>Week of 20/09/2026-26/09/2026</p>' + weekdays.map((day, index) => `<div class="bkgCalViewWDHeader" style="left:${4 + index * 13}%">${day}</div>`).join('') + '<div class="bkgCalViewItem" style="left:56%">GLIS1903-1A<br>10:00-10:50<br>KK315</div>', 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable')
     assert.equal(legacy.schedule[0].date, '2026-09-24')
-    console.log('PASS absolute calendar positions use headers; empty weeks replace stale entries')
+    const nextWeekUrl = 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable?week=2'
+    const prefetched = await extract(
+      `<p>Week of 20/09/2026-26/09/2026</p><a href="${nextWeekUrl}">Next Week</a><table id="WEEKLY_SCHED_HTMLAREA"><tr><th>Time</th>${weekdays.map(d => `<th>${d}</th>`).join('')}</tr><tr><td>09:00</td><td></td><td>CAES1001-1C3<br>09:00-10:50<br>CPD</td><td></td><td></td><td></td><td></td><td></td></tr></table>`,
+      'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable',
+      { [nextWeekUrl]: `<p>Week of 27/09/2026-03/10/2026</p><table id="WEEKLY_SCHED_HTMLAREA"><tr><th>Time</th>${weekdays.map(d => `<th>${d}</th>`).join('')}</tr><tr><td>10:00</td><td></td><td></td><td>GLIS1903-1A<br>10:00-11:50<br>KK315</td><td></td><td></td><td></td><td></td></tr></table>` },
+    )
+    assert.equal(prefetched.scheduleWeeks.length, 2, 'SIS sync prefetches upcoming weeks automatically')
+    assert.equal(prefetched.schedule.length, 2)
+    assert.equal(prefetched.schedule.some(item => item.date === '2026-09-29'), true)
+    console.log('PASS absolute calendar positions, multi-week prefetch and week-range metadata')
 
     const scheduleModule = stripTypeScriptTypes(readFileSync(new URL('../src/services/schedule.ts', import.meta.url), 'utf8'))
     const { todayClasses } = await import(`data:text/javascript;base64,${Buffer.from(scheduleModule).toString('base64')}`)
@@ -93,6 +102,10 @@ app.whenReady().then(async () => {
     assert.equal(moodle.assignments[0].due, 'Thursday, 17 September, 11:59 PM')
     assert.equal(moodle.assignments[1].submissionStatus, 'No submission')
     assert.equal(moodle.resources[0].course, 'Example course')
+    assert.equal(moodle.grades.find(g => g.title === 'Assignment 1')?.released, true)
+    assert.equal(moodle.grades.find(g => g.title === 'Assignment 1')?.value, '1.00')
+    assert.equal(moodle.grades.find(g => g.title === 'Assignment 2')?.released, false)
+    assert.equal(moodle.grades.find(g => g.title === 'Assignment 2')?.value, undefined)
     const direct = await extract(overview, overviewUrl, { [courseUrl]: course, [overviewUrl]: overview })
     assert.equal(direct.assignments.length, 2, 'visiting overview directly deduplicates course cards')
     console.log('PASS Moodle overview due dates, submission state, course association and deduplication')
@@ -139,7 +152,15 @@ app.whenReady().then(async () => {
     assert.equal(BrowserWindow.getAllWindows().length, 1)
     await new Promise(resolve => setTimeout(resolve, 250))
     writeFileSync(join(app.getPath('userData'), 'materials.png'), (await win.webContents.capturePage()).toPNG())
-    console.log(`PASS production calendar layout, course columns and direct-download button; screenshots: ${app.getPath('userData')}`)
+    await run('[...document.querySelectorAll("nav button")].find(node => node.innerText.includes("Moodle")).click()')
+    await until('document.querySelectorAll(".course-select-row").length >= 1')
+    await run('document.querySelector(".course-select-row").click()')
+    await until('document.querySelector(".course-detail-page") !== null && document.body.innerText.includes("未发布")')
+    await run('[...document.querySelectorAll("nav button")].find(node => node.innerText.includes("设置")).click()')
+    await until('document.body.innerText.includes("深色")')
+    await run('[...document.querySelectorAll(".mode-switch button")].find(node => node.innerText.includes("深色")).click()')
+    await until('document.documentElement.dataset.theme === "dark"')
+    console.log(`PASS production calendar layout, course drill-down, grade states, dark theme, course columns and direct-download button; screenshots: ${app.getPath('userData')}`)
     app.exit(0)
   } catch (error) { console.error(error); app.exit(1) }
 })

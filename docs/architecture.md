@@ -1,6 +1,6 @@
 # MyHKU 技术方案与实施顺序
 
-日期：2026-09-09。依据：[首版需求规格](product-spec.md)。当前仓库已包含可运行的 React/Vite 仪表盘、开发用本地 bridge 和 Chrome 页面连接器；Windows/macOS/Android 原生 WebView、安全存储与安装包仍按下文计划实施。
+日期：2026-11-12。依据：[首版需求规格](product-spec.md)。当前仓库已包含模块化 React/TypeScript 仪表盘、Electron Windows/macOS 桌面壳、基于 `WebViewAssetLoader` 的 Android 仪表盘壳层，以及桌面/Android/Chrome 扩展/CDP 四端共享的只读 DOM 提取器与按周分区加密缓存。
 
 ## 1. 架构方向
 

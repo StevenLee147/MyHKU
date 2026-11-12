@@ -22,6 +22,7 @@ const ARRAY_FIELDS = ['schedule', 'courses', 'assignments', 'resources', 'grades
 const snapshot = {
   fetchedAt: null,
   scheduleWeek: null,
+  scheduleWeeks: [],
   schedule: [],
   courses: [],
   assignments: [],
@@ -29,11 +30,60 @@ const snapshot = {
   grades: [],
   announcements: [],
 }
-const sessions = Object.fromEntries([...SITES].map(site => [site, {
+const defaultSession = () => ({
   connected: false,
   checkedAt: null,
   detail: '尚未从已登录页面同步',
-}]))
+})
+const sessions = Object.fromEntries([...SITES].map(site => [site, defaultSession()]))
+
+function normalizeWeekRange(value) {
+  if (!value || typeof value !== 'object') return null
+  const start = typeof value.start === 'string' ? value.start.trim().slice(0, 10) : ''
+  const end = typeof value.end === 'string' ? value.end.trim().slice(0, 10) : ''
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) return null
+  return { start, end }
+}
+
+function mergeWeekRanges(existing, incoming) {
+  const map = new Map()
+  for (const item of [...(existing || []), ...(incoming || [])]) {
+    const normalized = normalizeWeekRange(item)
+    if (normalized) map.set(`${normalized.start}..${normalized.end}`, normalized)
+  }
+  return [...map.values()].sort((a, b) => a.start.localeCompare(b.start)).slice(0, 52)
+}
+
+function resolveClassDate(item) {
+  const raw = String(item?.date || '').trim()
+  const iso = raw.match(/\b(\d{4}-\d{2}-\d{2})\b/)
+  if (iso) return iso[1]
+  const slash = raw.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/)
+  if (slash) return `${slash[3]}-${slash[2].padStart(2, '0')}-${slash[1].padStart(2, '0')}`
+  return undefined
+}
+
+function mergeScheduleByWeeks(existing, incoming, incomingWeeks, replace) {
+  if (!replace) return mergeById(existing, incoming, 'schedule')
+  if (!incomingWeeks.length) return incoming.slice(0, 1000)
+  const inSyncedWeeks = date => incomingWeeks.some(week => date >= week.start && date <= week.end)
+  const retained = existing.filter(item => {
+    const date = resolveClassDate(item)
+    return Boolean(date) && !inSyncedWeeks(date)
+  })
+  return mergeById(retained, incoming, 'schedule')
+}
+
+function resetBridgeState() {
+  snapshot.fetchedAt = null
+  snapshot.scheduleWeek = null
+  snapshot.scheduleWeeks = []
+  for (const field of ARRAY_FIELDS) snapshot[field] = []
+  for (const site of SITES) sessions[site] = defaultSession()
+  if (CACHE_FILE) {
+    try { fs.unlinkSync(CACHE_FILE) } catch { /* cache may not exist */ }
+  }
+}
 
 function decodeCacheKey(value) {
   if (!value) return null
@@ -44,7 +94,12 @@ function decodeCacheKey(value) {
 }
 
 function cachePayload() {
-  return JSON.stringify({ fetchedAt: snapshot.fetchedAt, scheduleWeek: snapshot.scheduleWeek, ...Object.fromEntries(ARRAY_FIELDS.map(field => [field, snapshot[field]])) })
+  return JSON.stringify({
+    fetchedAt: snapshot.fetchedAt,
+    scheduleWeek: snapshot.scheduleWeek,
+    scheduleWeeks: snapshot.scheduleWeeks,
+    ...Object.fromEntries(ARRAY_FIELDS.map(field => [field, snapshot[field]])),
+  })
 }
 
 function loadEncryptedCache() {
@@ -56,7 +111,10 @@ function loadEncryptedCache() {
     const data = JSON.parse(Buffer.concat([decipher.update(Buffer.from(record.data, 'base64')), decipher.final()]).toString('utf8'))
     if (!data || typeof data !== 'object') return
     for (const field of ARRAY_FIELDS) if (Array.isArray(data[field])) snapshot[field] = data[field]
-    if (data.scheduleWeek && typeof data.scheduleWeek === 'object' && typeof data.scheduleWeek.start === 'string' && typeof data.scheduleWeek.end === 'string') snapshot.scheduleWeek = { start: data.scheduleWeek.start.slice(0, 20), end: data.scheduleWeek.end.slice(0, 20) }
+    const week = normalizeWeekRange(data.scheduleWeek)
+    if (week) snapshot.scheduleWeek = week
+    if (Array.isArray(data.scheduleWeeks)) snapshot.scheduleWeeks = mergeWeekRanges([], data.scheduleWeeks)
+    else if (week) snapshot.scheduleWeeks = [week]
     snapshot.fetchedAt = typeof data.fetchedAt === 'string' ? data.fetchedAt : null
   } catch { /* absent or invalid cache is treated as empty */ }
 }
@@ -273,6 +331,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/snapshot') {
     send(res, 200, { ...snapshot }, origin); return
   }
+  if (req.method === 'POST' && url.pathname === '/api/reset') {
+    if (origin && !isLocalOrigin(origin)) { send(res, 403, { error: 'origin_not_allowed' }, origin); return }
+    resetBridgeState()
+    send(res, 200, { ok: true }, origin); return
+  }
   const ingestMatch = url.pathname.match(/^\/api\/ingest\/(portal|sis|moodle)$/)
   if (req.method === 'POST' && ingestMatch) {
     const site = ingestMatch[1]
@@ -286,17 +349,28 @@ const server = http.createServer(async (req, res) => {
       const replaceFields = Array.isArray(payload.replaceFields)
         ? payload.replaceFields.filter(field => ARRAY_FIELDS.includes(field))
         : []
+      const singleWeek = normalizeWeekRange(payload.scheduleWeek)
+      const incomingWeeks = mergeWeekRanges(
+        singleWeek ? [singleWeek] : [],
+        Array.isArray(payload.scheduleWeeks) ? payload.scheduleWeeks : [],
+      )
       for (const field of ARRAY_FIELDS) {
         const values = normalizeArray(field, payload[field])
         if (values !== undefined) {
-          snapshot[field] = replaceFields.includes(field) ? values : mergeById(snapshot[field], values, field)
+          if (field === 'schedule') {
+            snapshot.schedule = mergeScheduleByWeeks(snapshot.schedule, values, incomingWeeks, replaceFields.includes('schedule'))
+          } else {
+            snapshot[field] = replaceFields.includes(field) ? values : mergeById(snapshot[field], values, field)
+          }
           changed += values.length
         }
       }
-      if (payload.scheduleWeek && typeof payload.scheduleWeek === 'object' && typeof payload.scheduleWeek.start === 'string' && typeof payload.scheduleWeek.end === 'string') snapshot.scheduleWeek = { start: payload.scheduleWeek.start.slice(0, 20), end: payload.scheduleWeek.end.slice(0, 20) }
+      if (singleWeek) snapshot.scheduleWeek = singleWeek
+      else if (!snapshot.scheduleWeek && incomingWeeks[0]) snapshot.scheduleWeek = incomingWeeks[0]
+      if (incomingWeeks.length) snapshot.scheduleWeeks = mergeWeekRanges(snapshot.scheduleWeeks, incomingWeeks)
       const now = new Date().toISOString()
       const connected = typeof payload.connected === 'boolean' ? payload.connected : true
-      if (connected && ARRAY_FIELDS.some(field => Array.isArray(payload[field]))) snapshot.fetchedAt = now
+      if (connected && (ARRAY_FIELDS.some(field => Array.isArray(payload[field])) || incomingWeeks.length > 0)) snapshot.fetchedAt = now
       sessions[site] = { connected, checkedAt: now, detail: clean(payload.detail, 240) || `已从 ${site} 登录页面同步` }
       // Portal is the normal entry point for SIS. A schedule extracted from
       // that page proves the SIS session is usable as well.
@@ -314,7 +388,8 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(PORT, HOST, () => {
-  console.log(`MyHKU bridge listening on http://${HOST}:${PORT}`)
+  const actualPort = server.address()?.port ?? PORT
+  console.log(`MyHKU bridge listening on http://${HOST}:${actualPort}`)
 })
 
 function shutdown() { server.close(() => process.exit(0)) }

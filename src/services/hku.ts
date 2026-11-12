@@ -7,9 +7,12 @@
  * complete SSO/MFA, so this module deliberately does not try to automate it.
  */
 
+import { clearNotificationState, evaluateSnapshotNotifications, type NavTarget } from './notifications'
+
 export type HkuSite = 'portal' | 'sis' | 'moodle'
 export type ConnectionState = 'disconnected' | 'checking' | 'login_pending' | 'connected' | 'error'
 export type DataMode = 'demo' | 'live'
+export type ThemeMode = 'system' | 'light' | 'dark'
 
 export type SiteConnection = {
   state: ConnectionState
@@ -51,7 +54,9 @@ const STATE_KEY = 'myhku-connection-state'
 const MODE_KEY = 'myhku-data-mode'
 const MODE_SELECTED_KEY = 'myhku-data-mode-selected'
 const SNAPSHOT_KEY = 'myhku-live-snapshot'
-const BASELINE_KEY = 'myhku-notification-baseline'
+const THEME_KEY = 'myhku-theme-mode'
+const LAST_SYNC_KEY = 'myhku-last-sync'
+const LAST_SYNC_MS_KEY = 'myhku-last-sync-ms'
 // The desktop shell starts the loopback bridge itself. A browser preview may
 // also use this default when `npm run bridge` is running; deployments can
 // disable it explicitly with VITE_HKU_BRIDGE_URL=.
@@ -79,6 +84,30 @@ export function getDataMode(): DataMode {
 export function setDataMode(mode: DataMode) {
   localStorage.setItem(MODE_KEY, mode)
   localStorage.setItem(MODE_SELECTED_KEY, '1')
+}
+
+export function getThemeMode(): ThemeMode {
+  try {
+    const raw = localStorage.getItem(THEME_KEY)
+    if (raw === 'light' || raw === 'dark' || raw === 'system') return raw
+  } catch { /* ignore */ }
+  return 'system'
+}
+
+export function applyThemeMode(theme: ThemeMode) {
+  const root = document.documentElement
+  if (theme === 'system') {
+    delete root.dataset.theme
+    root.style.colorScheme = 'light dark'
+  } else {
+    root.dataset.theme = theme
+    root.style.colorScheme = theme === 'dark' ? 'only dark' : 'only light'
+  }
+}
+
+export function setThemeMode(theme: ThemeMode) {
+  try { localStorage.setItem(THEME_KEY, theme) } catch { /* ignore */ }
+  applyThemeMode(theme)
 }
 
 export function getConnectionStates(): Record<HkuSite, SiteConnection> {
@@ -118,6 +147,12 @@ export function applyDesktopSessions(sessions: DesktopSessions): Record<HkuSite,
 
 export async function openOfficialLogin(site: HkuSite): Promise<Record<HkuSite, SiteConnection>> {
   if (window.myhkuDesktop?.loginSite) return applyDesktopSessions(await window.myhkuDesktop.loginSite(site))
+  if (window.myhkuAndroid?.openLogin) {
+    window.myhkuAndroid.openLogin(site)
+    const states = getConnectionStates()
+    states[site] = { state: 'login_pending', detail: '请在官方页面完成登录，连接状态会自动更新' }
+    return save(states)
+  }
   window.open(HKU_SITES[site].url, '_blank', 'noopener,noreferrer')
   const states = getConnectionStates()
   states[site] = { state: 'login_pending', detail: '请在官方页面完成登录，连接状态会自动更新' }
@@ -176,6 +211,7 @@ export type LiveSnapshot = {
   fetchedAt: string
   schedule: LiveClass[]
   scheduleWeek?: { start: string; end: string }
+  scheduleWeeks?: Array<{ start: string; end: string }>
   courses: LiveCourse[]
   assignments: LiveAssignment[]
   resources: LiveResource[]
@@ -190,22 +226,30 @@ export type LiveResource = { id: string; title: string; course: string; url?: st
 export type LiveGrade = { id: string; title: string; course: string; value?: string; released?: boolean }
 export type LiveAnnouncement = { id: string; title: string; course: string; published?: string; url?: string }
 
+function normalizeSnapshotPayload(payload: Partial<LiveSnapshot>, fallbackFetchedAt?: string): LiveSnapshot {
+  const weeks = Array.isArray(payload.scheduleWeeks)
+    ? payload.scheduleWeeks.filter(w => w && typeof w.start === 'string' && typeof w.end === 'string')
+    : undefined
+  return {
+    fetchedAt: payload.fetchedAt || fallbackFetchedAt || new Date().toISOString(),
+    schedule: Array.isArray(payload.schedule) ? payload.schedule : [],
+    ...(payload.scheduleWeek && typeof payload.scheduleWeek.start === 'string' && typeof payload.scheduleWeek.end === 'string' ? { scheduleWeek: payload.scheduleWeek } : {}),
+    ...(weeks && weeks.length > 0 ? { scheduleWeeks: weeks } : {}),
+    courses: Array.isArray(payload.courses) ? payload.courses : [],
+    assignments: Array.isArray(payload.assignments) ? payload.assignments : [],
+    resources: Array.isArray(payload.resources) ? payload.resources : [],
+    grades: Array.isArray(payload.grades) ? payload.grades : [],
+    announcements: Array.isArray(payload.announcements) ? payload.announcements : [],
+  }
+}
+
 export async function fetchLiveSnapshot(signal?: AbortSignal): Promise<LiveSnapshot> {
   try {
-    const raw = window.myhkuAndroid?.getSnapshot?.()
+    const raw = window.myhkuAndroid?.getSnapshot?.() || window.myhkuAndroid?.getLatestSnapshot?.()
     if (raw) {
       const native = JSON.parse(raw) as Partial<LiveSnapshot> & { capturedAt?: string; connected?: boolean }
       if (native.connected !== false && (native.fetchedAt || native.capturedAt)) {
-        return {
-          fetchedAt: native.fetchedAt || native.capturedAt || new Date().toISOString(),
-          schedule: Array.isArray(native.schedule) ? native.schedule : [],
-          ...(native.scheduleWeek && typeof native.scheduleWeek.start === 'string' && typeof native.scheduleWeek.end === 'string' ? { scheduleWeek: native.scheduleWeek } : {}),
-          courses: Array.isArray(native.courses) ? native.courses : [],
-          assignments: Array.isArray(native.assignments) ? native.assignments : [],
-          resources: Array.isArray(native.resources) ? native.resources : [],
-          grades: Array.isArray(native.grades) ? native.grades : [],
-          announcements: Array.isArray(native.announcements) ? native.announcements : [],
-        }
+        return normalizeSnapshotPayload(native, native.capturedAt)
       }
     }
   } catch { /* native bridge may not be present or may have no data */ }
@@ -216,71 +260,52 @@ export async function fetchLiveSnapshot(signal?: AbortSignal): Promise<LiveSnaps
   if (typeof payload.fetchedAt !== 'string' || Number.isNaN(Date.parse(payload.fetchedAt))) {
     throw new Error('尚未收到 HKU 页面数据，数据到达后会自动更新。')
   }
-  return {
-    fetchedAt: payload.fetchedAt,
-    schedule: Array.isArray(payload.schedule) ? payload.schedule : [],
-    ...(payload.scheduleWeek && typeof payload.scheduleWeek.start === 'string' && typeof payload.scheduleWeek.end === 'string' ? { scheduleWeek: payload.scheduleWeek } : {}),
-    courses: Array.isArray(payload.courses) ? payload.courses : [],
-    assignments: Array.isArray(payload.assignments) ? payload.assignments : [],
-    resources: Array.isArray(payload.resources) ? payload.resources : [],
-    grades: Array.isArray(payload.grades) ? payload.grades : [],
-    announcements: Array.isArray(payload.announcements) ? payload.announcements : [],
-  }
+  return normalizeSnapshotPayload(payload)
 }
 
 /**
- * Development/browser cache for the last normalized snapshot. Native shells
- * should replace this with encrypted SQLite protected by the platform keystore.
- * It contains no cookies, passwords, or access tokens.
+ * Local renderer cache for the last normalized snapshot.
+ * Contains no cookies, passwords, or access tokens.
  */
 export function getCachedSnapshot(): LiveSnapshot | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null') as Partial<LiveSnapshot> | null
     if (!parsed || typeof parsed.fetchedAt !== 'string') return null
-    return {
-      fetchedAt: parsed.fetchedAt,
-      schedule: Array.isArray(parsed.schedule) ? parsed.schedule : [],
-      ...(parsed.scheduleWeek && typeof parsed.scheduleWeek.start === 'string' && typeof parsed.scheduleWeek.end === 'string' ? { scheduleWeek: parsed.scheduleWeek } : {}),
-      courses: Array.isArray(parsed.courses) ? parsed.courses : [],
-      assignments: Array.isArray(parsed.assignments) ? parsed.assignments : [],
-      resources: Array.isArray(parsed.resources) ? parsed.resources : [],
-      grades: Array.isArray(parsed.grades) ? parsed.grades : [],
-      announcements: Array.isArray(parsed.announcements) ? parsed.announcements : [],
-    }
+    return normalizeSnapshotPayload(parsed)
   } catch {
     return null
   }
 }
 
 export function cacheSnapshot(snapshot: LiveSnapshot) {
-  localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot))
+  try { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot)) } catch { /* ignore */ }
 }
 
-/** Notify only on changes after the first successful baseline sync. */
-export function notifySnapshotChanges(next: LiveSnapshot): number {
-  let previous: Partial<LiveSnapshot> | null = null
-  try { previous = JSON.parse(localStorage.getItem(BASELINE_KEY) || 'null') } catch { previous = null }
-  localStorage.setItem(BASELINE_KEY, JSON.stringify(next))
-  if (!previous) return 0
-  const oldAssignments = new Set((previous.assignments || []).map(item => item.id))
-  const oldAnnouncements = new Set((previous.announcements || []).map(item => item.id))
-  const oldClasses = new Map((previous.schedule || []).map(item => [item.id, `${item.start}|${item.end}|${item.room || ''}`]))
-  const messages: string[] = []
-  for (const item of next.assignments) if (!oldAssignments.has(item.id) && !item.completed) messages.push(`新待办：${item.title}`)
-  for (const item of next.announcements) if (!oldAnnouncements.has(item.id)) messages.push(`新公告：${item.title}`)
-  for (const item of next.schedule) {
-    const before = oldClasses.get(item.id)
-    const after = `${item.start}|${item.end}|${item.room || ''}`
-    if (before && before !== after) messages.push(`课表有变化：${item.title}`)
-  }
-  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    for (const message of messages.slice(0, 5)) new Notification('MyHKU', { body: message })
-  }
-  return messages.length
+/** Notify only on changes and upcoming deadlines after the first successful baseline sync. */
+export function notifySnapshotChanges(
+  next: LiveSnapshot,
+  onNavigate?: (target: NavTarget, course?: string) => void,
+): number {
+  return evaluateSnapshotNotifications(next, onNavigate).length
 }
 
 export function clearConnections() {
-  localStorage.removeItem(STATE_KEY)
-  localStorage.removeItem(SNAPSHOT_KEY)
-  localStorage.removeItem(BASELINE_KEY)
+  for (const key of Object.keys(latestDesktopSessions) as HkuSite[]) {
+    delete latestDesktopSessions[key]
+  }
+  for (const key of [STATE_KEY, SNAPSHOT_KEY, LAST_SYNC_KEY, LAST_SYNC_MS_KEY]) {
+    try { localStorage.removeItem(key) } catch { /* ignore */ }
+  }
+  clearNotificationState()
+}
+
+export async function signOutAccount(): Promise<void> {
+  if (window.myhkuDesktop?.clearAccount) {
+    await window.myhkuDesktop.clearAccount()
+  } else if (window.myhkuAndroid?.clearAccount) {
+    window.myhkuAndroid.clearAccount()
+  } else if (bridgeBase) {
+    await fetch(`${bridgeBase}/api/reset`, { method: 'POST', credentials: 'omit' }).catch(() => {})
+  }
+  clearConnections()
 }

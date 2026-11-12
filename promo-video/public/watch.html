@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyHKU — Less searching. More learning.</title>
+<style>
+:root { color-scheme: dark; font-family: "Bahnschrift", "Segoe UI", sans-serif; background: #081725; color: #f5f8fc; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 80% 10%, #18465366, transparent 60%); }
+main { max-width: 1480px; margin: 0 auto; padding: 36px 42px 28px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 25px; }
+.brand { display: flex; align-items: center; gap: 15px; font-size: 28px; font-weight: 600; }
+.brand img { width: 48px; height: 48px; border-radius: 12px; }
+.meta, p { font-family: "Segoe UI", sans-serif; }
+.meta { color: #9badc0; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; }
+video { width: 100%; display: block; aspect-ratio: 16/9; background: #0a1929; border: 1px solid #39616c; border-radius: 13px; box-shadow: 0 20px 90px #0006; }
+footer { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-top: 25px; }
+h1 { font-size: clamp(23px, 2.7vw, 38px); margin: 0 0 8px; letter-spacing: -1px; font-weight: 600; }
+p { color: #9badc0; margin: 0; line-height: 1.6; font-size: 14px; }
+a { color: #081725; background: #50c8bd; border-radius: 9px; padding: 13px 22px; text-decoration: none; white-space: nowrap; font-weight: 600; }
+a:focus-visible { outline: 3px solid #e7c68b; outline-offset: 5px; }
+@media(max-width: 700px) { main { padding: 22px 16px; } header,footer { align-items: flex-start; flex-direction: column; gap: 14px; } .meta { font-size: 11px; } video { border-radius: 7px; } }
+</style>
+</head>
+<body>
+<main>
+<header><div class="brand"><img src="/logo.svg" alt="">MyHKU</div><div class="meta">Original launch film · 48 sec · 1080p</div></header>
+<video controls preload="metadata" poster="/poster.png" aria-label="MyHKU promotional film with English and Chinese titles and an original instrumental soundtrack"><source src="/film.mp4" type="video/mp4"></video>
+<footer><div><h1>Less searching. More learning.</h1><p>Authentic demo screens. Original music. Made for MyHKU.</p><p>Independent project · Not an official HKU application · v0.2.1-alpha</p></div><a href="/film.mp4" download="myhku-launch-1080p.mp4">Download film ↓</a></footer>
+</main>
+</body>
+</html>

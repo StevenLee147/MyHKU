@@ -1,160 +1,220 @@
-import { StrictMode, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Bell, BookOpen, CalendarDays, CheckCircle2, ChevronDown, Clock3, Download, ExternalLink, FileText, LayoutDashboard, Link2, LogIn, Menu, RefreshCw, Search, Settings, ShieldCheck, Sparkles, Trophy, X, CircleAlert } from 'lucide-react'
+import {
+  Bell,
+  BookOpen,
+  CalendarDays,
+  CheckCircle2,
+  ChevronDown,
+  FileText,
+  KeyRound,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  RefreshCw,
+  Search,
+  Settings,
+  ShieldCheck,
+  X,
+} from 'lucide-react'
 import './styles.css'
-import { LegalGate, LegalSettings } from './legal'
-import { hongKongDate, scheduleDate, todayClasses } from './services/schedule'
-import { applyDesktopSessions, cacheSnapshot, checkAllConnections, checkConnection, fetchLiveSnapshot, getCachedSnapshot, getConnectionStates, getDataMode, HKU_SITES, notifySnapshotChanges, openOfficialLogin, safeHkuUrl, setDataMode, type ConnectionState, type DataMode, type HkuSite, type LiveSnapshot, type SiteConnection } from './services/hku'
+import { LegalGate } from './legal'
+import { AccountSetup } from './components/AccountSetup'
+import { CalendarPage } from './components/CalendarPage'
+import { MaterialsPage } from './components/MaterialsPage'
+import { MoodlePage } from './components/MoodlePage'
+import { OverviewPage, type ConnectionPhase } from './components/OverviewPage'
+import { SettingsPage } from './components/SettingsPage'
+import { buildDemoSnapshot } from './services/demoData'
+import {
+  applyDesktopSessions,
+  applyThemeMode,
+  cacheSnapshot,
+  checkAllConnections,
+  clearConnections,
+  fetchLiveSnapshot,
+  getCachedSnapshot,
+  getConnectionStates,
+  getDataMode,
+  getThemeMode,
+  notifySnapshotChanges,
+  setDataMode,
+  setThemeMode,
+  signOutAccount,
+  type DataMode,
+  type HkuSite,
+  type LiveSnapshot,
+  type SiteConnection,
+  type ThemeMode,
+} from './services/hku'
+import {
+  getNotificationFeed,
+  markAllNotificationsRead,
+  type AppNotificationItem,
+  type NavTarget,
+} from './services/notifications'
+import { hongKongGreeting } from './services/schedule'
 
-type ConnectionPhase = 'checking' | 'connected' | 'manual' | 'disconnected'
-type NavKey = 'overview' | 'calendar' | 'moodle' | 'materials' | 'settings'
-const navItems: { key: NavKey; label: string; icon: typeof LayoutDashboard }[] = [
-  { key: 'overview', label: '概览', icon: LayoutDashboard }, { key: 'calendar', label: '我的课表', icon: CalendarDays }, { key: 'moodle', label: 'Moodle', icon: BookOpen }, { key: 'materials', label: '课程资料', icon: FileText }, { key: 'settings', label: '设置', icon: Settings }
+const navItems: { key: NavTarget; label: string; icon: typeof LayoutDashboard }[] = [
+  { key: 'overview', label: '概览', icon: LayoutDashboard },
+  { key: 'calendar', label: '我的课表', icon: CalendarDays },
+  { key: 'moodle', label: 'Moodle', icon: BookOpen },
+  { key: 'materials', label: '课程资料', icon: FileText },
+  { key: 'settings', label: '设置', icon: Settings },
 ]
-const classes = [
-  { time: '09:30', end: '11:20', title: '数据科学导论', code: 'COMP7901', room: 'KB 419', teacher: '李教授', tone: 'blue' },
-  { time: '14:30', end: '16:20', title: '计算机系统原理', code: 'COMP7801', room: 'CYM LT', teacher: '陈博士', tone: 'violet' }
-]
-const dueItems = [
-  { title: 'Assignment 2 · 数据分析', course: 'COMP7901', due: '今天 23:59', urgent: true },
-  { title: 'Reading response · Week 4', course: 'COMP7801', due: '明天 18:00', urgent: false },
-  { title: '小组项目分工确认', course: 'COMP7103', due: '周五', urgent: false }
-]
 
-const connectionLabel: Record<ConnectionState, string> = {
-  disconnected: '未连接', checking: '正在自动连接', login_pending: '等待完成登录', connected: '已连接', error: '检查失败',
-}
-
-function AccountSetup({ onReady }: { onReady: (account: { username: string; email: string }) => void }) {
-  const [username, setUsername] = useState('')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const submit = async (event: FormEvent) => {
-    event.preventDefault(); setError('')
-    if (!username.trim() || !email.trim() || !password) { setError('请填写本地用户名、HKU 邮箱和密码'); return }
-    if (!email.trim().toLowerCase().endsWith('@connect.hku.hk')) { setError('请输入 @connect.hku.hk 邮箱'); return }
-    const save = window.myhkuDesktop?.saveAccount
-    if (!save) { setError('请在 MyHKU 桌面版中完成首次账户设置'); return }
-    setBusy(true)
-    try {
-      const result = await save({ localUsername: username.trim(), email: email.trim(), password })
-      await window.myhkuDesktop?.beginLogin?.()
-      onReady({ username: result.localUsername || username.trim(), email: result.email || email.trim() })
-    } catch (cause) { setError(cause instanceof Error ? cause.message : '账户保存失败') }
-    finally { setBusy(false); setPassword('') }
-  }
-  return <div className="account-gate"><div className="account-card"><img className="account-mark" src="./brand/logo.svg" alt="MyHKU"/><p className="eyebrow">第一次使用 MyHKU</p><h1>创建你的 HKU 账户</h1><p className="account-intro">保存后，MyHKU 会在后台复用官方登录会话。首次登录仍会在 HKU 官方页面完成 2FA。</p><form onSubmit={submit} className="account-form"><label>本地用户名<input value={username} onChange={event => setUsername(event.target.value)} placeholder="请输入本地用户名" autoComplete="username" autoFocus /></label><label>HKU 邮箱<input value={email} onChange={event => setEmail(event.target.value)} type="email" autoComplete="email" /></label><label>HKU 密码<input value={password} onChange={event => setPassword(event.target.value)} type="password" autoComplete="current-password" /></label>{error && <p className="account-error">{error}</p>}<button className="account-submit" disabled={busy}>{busy ? <><RefreshCw size={15} className="spin"/> 正在保存…</> : <><LogIn size={15}/> 保存并开始首次登录</>}</button></form><p className="account-footnote"><ShieldCheck size={14}/> 密码只交给桌面版的系统安全存储，不会进入网页缓存或同步数据。</p></div></div>
-}
-
-function ConnectionSettings({ mode, setMode, states, setStates, onNotice }: {
-  mode: DataMode
-  setMode: (mode: DataMode) => void
-  states: Record<HkuSite, SiteConnection>
-  setStates: (states: Record<HkuSite, SiteConnection>) => void
-  onNotice: (message: string) => void
-}) {
-  const [checking, setChecking] = useState<HkuSite | 'all' | null>(null)
-  const login = async (site: HkuSite) => {
-    // Opening an official login page is an explicit request for the user's
-    // real HKU data. This also recovers from an older install that persisted
-    // the demo mode before the native session bridge was added.
-    if (mode !== 'live') setMode('live')
-    try { setStates(await openOfficialLogin(site)); onNotice(`${HKU_SITES[site].label} 正在自动检查连接，需要操作时会显示官方窗口`) }
-    catch { onNotice('无法启动连接，请稍后重试') }
-  }
-  const check = async (site: HkuSite) => {
-    setChecking(site)
-    try { await checkConnection(site); setStates(getConnectionStates()) }
-    catch { onNotice('无法读取连接状态，请稍后重试') }
-    finally { setChecking(null) }
-  }
-  const checkAll = async () => {
-    setChecking('all')
-    try { setStates(await checkAllConnections()) }
-    catch { onNotice('无法读取连接状态，请稍后重试') }
-    finally { setChecking(null) }
-  }
-  return <><section className="panel connections-panel">
-    <div className="panel-head"><div><h2>HKU 服务连接</h2><p>账户凭据保存在本机系统安全存储，登录仍通过 HKU 官方页面完成</p></div><button className="text-btn" onClick={checkAll} disabled={checking !== null}><RefreshCw size={13} className={checking === 'all' ? 'spin' : ''}/> 检查全部</button></div>
-    <div className="mode-switch" role="group" aria-label="数据来源"><span>数据来源</span><button className={mode === 'demo' ? 'selected' : ''} onClick={() => { setMode('demo'); onNotice('已切换到演示数据') }}>演示数据</button><button className={mode === 'live' ? 'selected' : ''} onClick={() => { setMode('live'); onNotice('真实模式已启用，请先连接 HKU 服务') }}>真实模式</button></div>
-    <div className="connection-list">{(Object.keys(HKU_SITES) as HkuSite[]).map(site => {
-      const item = HKU_SITES[site]; const state = states[site]
-      const isChecking = checking === site || checking === 'all'
-      return <article className="connection-card" key={site}><div className="connection-icon"><ShieldCheck size={19}/></div><div className="connection-copy"><strong>{item.label}</strong><span>{item.description}</span><small className={`connection-state ${state.state}`}><i/>{connectionLabel[state.state]}{state.detail ? ` · ${state.detail}` : ''}</small></div><div className="connection-actions"><button className="login-link" disabled={state.state === 'checking' || state.state === 'connected'} onClick={() => void login(site)} aria-label={`连接 ${item.label}`}><LogIn size={14}/> {state.state === 'connected' ? '已连接' : state.state === 'checking' ? '自动连接中…' : state.state === 'login_pending' ? '继续验证' : '连接'}</button><button className="check-link" onClick={() => check(site)} disabled={isChecking}>{isChecking ? <RefreshCw size={13} className="spin"/> : <Link2 size={13}/>} 检查连接</button><a href={item.url} target="_blank" rel="noreferrer" aria-label={`打开 ${item.label}`}><ExternalLink size={14}/></a></div></article>
-    })}</div>
-    <div className="connection-note"><CircleAlert size={15}/><span>桌面版会复用持久化的 HKU 官方会话；首次登录或会话过期时会显示官方窗口完成 2FA。MyHKU 只读取页面上显示的只读字段，密码由桌面版系统安全存储保护。</span></div>
-  </section><LegalSettings /></>
+function isApplePlatform(): boolean {
+  if (window.myhkuDesktop?.platform) return window.myhkuDesktop.platform === 'darwin'
+  return /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent || '')
 }
 
 function App() {
   const [authReady, setAuthReady] = useState(false)
   const [accountConfigured, setAccountConfigured] = useState(false)
   const [account, setAccount] = useState<{ username?: string; email?: string }>({})
-  const [active, setActive] = useState<NavKey>('overview')
+  const [editingAccount, setEditingAccount] = useState(false)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const [notifMenuOpen, setNotifMenuOpen] = useState(false)
+  const [notifFeed, setNotifFeed] = useState<AppNotificationItem[]>(() => getNotificationFeed())
+  const [active, setActive] = useState<NavTarget>('overview')
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null)
   const [mobileNav, setMobileNav] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [lastSync, setLastSync] = useState(() => localStorage.getItem('myhku-last-sync') ?? '尚未同步')
   const [query, setQuery] = useState('')
   const [notice, setNotice] = useState('')
   const [dataMode, setDataModeState] = useState<DataMode>(() => getDataMode())
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode())
   const [connections, setConnections] = useState<Record<HkuSite, SiteConnection>>(() => getConnectionStates())
   const [liveSnapshot, setLiveSnapshot] = useState<LiveSnapshot | null>(() => getCachedSnapshot())
   const [liveError, setLiveError] = useState('')
+
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const started = useRef(false)
   const syncingRef = useRef(false)
   const pendingSnapshotRead = useRef(false)
   const lastAttemptAt = useRef(0)
-  // The daily timer is installed once for the lifetime of the app. Keep the
-  // current mode in a ref so switching between demo/live also affects that
-  // timer instead of leaving it with the initial render's value.
   const dataModeRef = useRef(dataMode)
   dataModeRef.current = dataMode
   const syncRef = useRef<(refreshOfficial?: boolean) => void>(() => {})
+
   useEffect(() => {
-    let active = true
+    applyThemeMode(themeMode)
+  }, [themeMode])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
+      } else if (event.key === 'Escape') {
+        setUserMenuOpen(false)
+        setNotifMenuOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  const showToast = useCallback((message: string, duration = 3500) => {
+    setNotice(message)
+    if (duration > 0) {
+      window.setTimeout(() => {
+        setNotice(current => (current === message ? '' : current))
+      }, duration)
+    }
+  }, [])
+
+  const handleNavigate = useCallback((target: NavTarget, course?: string) => {
+    setActive(target)
+    if (target === 'moodle') setSelectedCourseId(course || null)
+    else setSelectedCourseId(null)
+    setMobileNav(false)
+    setNotifMenuOpen(false)
+    setUserMenuOpen(false)
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
     let statusEvents = 0
     const stop = window.myhkuDesktop?.onAuthStatus?.(payload => {
-      if (!active || !payload) return
-      statusEvents++
+      if (!mounted || !payload) return
+      statusEvents += 1
       if (payload.sessions) setConnections(applyDesktopSessions(payload.sessions))
       if (payload.configured !== undefined) setAccountConfigured(payload.configured)
-      if (payload.state === 'signed_out') { setAccountConfigured(false); setAccount({}); setLiveSnapshot(null) }
+      if (payload.state === 'signed_out') {
+        clearConnections()
+        setConnections(getConnectionStates())
+        setAccountConfigured(false)
+        setAccount({})
+        setLiveSnapshot(null)
+        setLiveError('')
+        setLastSync('尚未同步')
+        setNotifFeed([])
+      }
     })
     const load = async () => {
       const version = statusEvents
       const status = await window.myhkuDesktop?.accountStatus?.()
-      if (!active) return
-      if (!status) { setAuthReady(true); setAccountConfigured(true); return }
+      if (!mounted) return
+      if (!status) {
+        setAuthReady(true)
+        setAccountConfigured(true)
+        return
+      }
       if (version === statusEvents) setAccountConfigured(Boolean(status.configured))
-      setAccount({ username: status.localUsername, email: status.email }); setAuthReady(true)
+      setAccount({ username: status.localUsername, email: status.email })
+      setAuthReady(true)
       if (status.sessions) setConnections(applyDesktopSessions(status.sessions))
     }
-    load().catch(() => { if (active) { setAuthReady(true); setNotice('无法读取本地账户状态') } })
-    return () => { active = false; stop?.() }
-  }, [])
+    load().catch(() => {
+      if (mounted) {
+        setAuthReady(true)
+        showToast('无法读取本地账户状态')
+      }
+    })
+    return () => {
+      mounted = false
+      stop?.()
+    }
+  }, [showToast])
+
   const sync = (refreshOfficialPages = true) => {
     if (syncingRef.current) {
-      // A second page may finish while the first page's snapshot is being
-      // read. Remember its notification so no completed ingest is dropped.
       if (!refreshOfficialPages) pendingSnapshotRead.current = true
       return
     }
     syncingRef.current = true
     if (refreshOfficialPages) lastAttemptAt.current = Date.now()
     const mode = dataModeRef.current
-    setRefreshing(true); setNotice('正在同步 Portal、SIS 和 Moodle…')
+    setRefreshing(true)
+    setNotice('正在同步 Portal、SIS 和 Moodle…')
+
     const finish = (message?: string, success = true, fetchedAt?: string) => {
       if (success) {
         const fetched = fetchedAt ? new Date(fetchedAt) : new Date()
-        const stamp = fetched.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-        setLastSync(stamp); localStorage.setItem('myhku-last-sync', stamp); localStorage.setItem('myhku-last-sync-ms', String(fetched.getTime()))
+        const stamp = fetched.toLocaleString('zh-CN', {
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        setLastSync(stamp)
+        try {
+          localStorage.setItem('myhku-last-sync', stamp)
+          localStorage.setItem('myhku-last-sync-ms', String(fetched.getTime()))
+        } catch { /* ignore */ }
       }
-      syncingRef.current = false; setRefreshing(false); setNotice(message || (mode === 'live' ? '真实数据同步完成' : '同步完成，内容已是最新'))
-      window.setTimeout(() => setNotice(''), 3000)
-      if (pendingSnapshotRead.current) { pendingSnapshotRead.current = false; window.setTimeout(() => syncRef.current(false), 0) }
+      syncingRef.current = false
+      setRefreshing(false)
+      showToast(message || (mode === 'live' ? '真实数据同步完成' : '演示数据已就绪'), 3000)
+      if (pendingSnapshotRead.current) {
+        pendingSnapshotRead.current = false
+        window.setTimeout(() => syncRef.current(false), 0)
+      }
     }
+
     if (mode === 'live') {
       const previousFetchedAt = liveSnapshot?.fetchedAt
       const refresh = refreshOfficialPages
@@ -164,9 +224,7 @@ function App() {
             ? Promise.resolve(window.myhkuAndroid.refreshHku())
             : Promise.resolve()
         : Promise.resolve()
-      // The reload IPC only starts the official page refresh. Wait for the
-      // bridge snapshot to advance instead of claiming success after a fixed
-      // sleep; authenticated pages can take longer than a second to render.
+
       const readSnapshot = async () => {
         let latest: LiveSnapshot | null = null
         const deadline = Date.now() + (refreshOfficialPages ? 20_000 : 5_000)
@@ -174,17 +232,45 @@ function App() {
           try {
             latest = await fetchLiveSnapshot()
             if (!previousFetchedAt || latest.fetchedAt !== previousFetchedAt || !refreshOfficialPages) return latest
-          } catch { /* the page may still be loading; retry during this refresh */ }
+          } catch { /* page may still be loading */ }
           if (Date.now() < deadline) await new Promise(resolve => window.setTimeout(resolve, 250))
         } while (Date.now() < deadline)
         if (latest) return latest
         throw new Error('尚未收到 HKU 页面数据，数据到达后会自动更新。')
       }
-      refresh.then(readSnapshot).then(async snapshot => ({ snapshot, states: await checkAllConnections() })).then(({ states, snapshot }) => { setConnections(states); setLiveSnapshot(snapshot); cacheSnapshot(snapshot); notifySnapshotChanges(snapshot); setLiveError(''); finish(snapshot.fetchedAt === previousFetchedAt ? '已读取现有真实数据，页面仍在更新' : '真实数据同步完成', true, snapshot.fetchedAt) }).catch(error => { const detail = error instanceof Error ? error.message : '真实数据同步失败'; setLiveError(liveSnapshot ? `${detail} 当前显示上次成功同步的数据。` : detail); finish(Object.values(getConnectionStates()).some(item => item.state === 'checking' || item.state === 'login_pending') ? '正在连接 HKU，完成后会自动同步数据' : '真实数据同步失败，请检查设置中的连接状态', false) })
+
+      refresh
+        .then(readSnapshot)
+        .then(async snapshot => ({ snapshot, states: await checkAllConnections() }))
+        .then(({ states, snapshot }) => {
+          setConnections(states)
+          setLiveSnapshot(snapshot)
+          cacheSnapshot(snapshot)
+          notifySnapshotChanges(snapshot, handleNavigate)
+          setNotifFeed(getNotificationFeed())
+          setLiveError('')
+          finish(
+            snapshot.fetchedAt === previousFetchedAt ? '已读取现有真实数据，页面仍在更新' : '真实数据同步完成',
+            true,
+            snapshot.fetchedAt,
+          )
+        })
+        .catch(error => {
+          const detail = error instanceof Error ? error.message : '真实数据同步失败'
+          setLiveError(liveSnapshot ? `${detail} 当前显示上次成功同步的数据。` : detail)
+          finish(
+            Object.values(getConnectionStates()).some(item => item.state === 'checking' || item.state === 'login_pending')
+              ? '正在连接 HKU，完成后会自动同步数据'
+              : '真实数据同步失败，请检查设置中的连接状态',
+            false,
+          )
+        })
+    } else {
+      window.setTimeout(() => finish('演示数据已刷新', true), 450)
     }
-    else window.setTimeout(finish, 900)
   }
   syncRef.current = sync
+
   useEffect(() => {
     if (!authReady || !accountConfigured) return
     if (!started.current) {
@@ -192,236 +278,457 @@ function App() {
       lastAttemptAt.current = Date.now()
       sync(false)
     }
-    // The main process emits this when an authenticated WebView has finished
-    // parsing a page. Pull the normalized snapshot immediately without
-    // reloading the official pages again. This keeps login completion and the
-    // dashboard in sync without background polling.
-    const stopListening = window.myhkuDesktop?.onHkuUpdated?.(() => {
+    const stopDesktopListening = window.myhkuDesktop?.onHkuUpdated?.(() => {
       if (dataModeRef.current === 'live') syncRef.current(false)
     })
-    // Count attempts, not successful syncs: an unavailable bridge must not
-    // trigger a network retry every minute. The interval only checks time.
+    const onNativeUpdated = () => {
+      if (dataModeRef.current === 'live') syncRef.current(false)
+    }
+    window.addEventListener('myhku-native-updated', onNativeUpdated)
+
     const sessionTimer = window.setInterval(() => {
-      if (dataModeRef.current === 'live') void checkAllConnections().then(setConnections).catch(() => {})
+      if (dataModeRef.current === 'live') {
+        void checkAllConnections().then(setConnections).catch(() => {})
+      }
     }, 5000)
-    const timer = window.setInterval(() => {
+    const dailyTimer = window.setInterval(() => {
       if (Date.now() - lastAttemptAt.current >= 24 * 60 * 60 * 1000) syncRef.current()
     }, 60 * 1000)
-    return () => { stopListening?.(); window.clearInterval(timer); window.clearInterval(sessionTimer) }
+
+    return () => {
+      stopDesktopListening?.()
+      window.removeEventListener('myhku-native-updated', onNativeUpdated)
+      window.clearInterval(dailyTimer)
+      window.clearInterval(sessionTimer)
+    }
   }, [authReady, accountConfigured])
+
+  const handleSignOut = async () => {
+    setUserMenuOpen(false)
+    await signOutAccount()
+    setConnections(getConnectionStates())
+    setLiveSnapshot(null)
+    setLiveError('')
+    setLastSync('尚未同步')
+    setNotifFeed([])
+    if (window.myhkuDesktop?.accountStatus) {
+      setAccount({})
+      setAccountConfigured(false)
+    } else {
+      showToast('已退出官方会话并清空全部本地缓存')
+    }
+  }
+
+  const demoSnapshot = useMemo(() => buildDemoSnapshot(), [])
+  const activeSnapshot = dataMode === 'demo' ? demoSnapshot : liveSnapshot
+
   const title = navItems.find(n => n.key === active)?.label ?? '概览'
   const connectedCount = Object.values(connections).filter(item => item.state === 'connected').length
   const manualConnection = Object.values(connections).find(item => item.state === 'login_pending')
-  const connectionPhase: ConnectionPhase = Object.values(connections).some(item => item.state === 'login_pending') ? 'manual' : Object.values(connections).some(item => item.state === 'checking') ? 'checking' : connectedCount > 0 ? 'connected' : 'disconnected'
-  const accountLabel = dataMode === 'demo' ? '演示数据' : connectedCount === 3 ? '已安全连接' : connectedCount ? `${connectedCount}/3 个服务已连接` : '需要连接 HKU'
+  const connectionPhase: ConnectionPhase = Object.values(connections).some(item => item.state === 'login_pending')
+    ? 'manual'
+    : Object.values(connections).some(item => item.state === 'checking')
+      ? 'checking'
+      : connectedCount > 0
+        ? 'connected'
+        : 'disconnected'
+  const accountLabel =
+    dataMode === 'demo'
+      ? '演示数据模式'
+      : connectedCount === 3
+        ? '已安全连接'
+        : connectedCount
+          ? `${connectedCount}/3 个服务已连接`
+          : '需要连接 HKU'
+
   const now = new Date()
-  const today = { weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(now), date: new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', timeZone: 'Asia/Hong_Kong' }).format(now) }
-  const filteredDue = useMemo(() => dueItems.filter(i => `${i.title}${i.course}`.toLowerCase().includes(query.toLowerCase())), [query])
-  if (!authReady) return <div className="account-gate"><div className="account-loading"><RefreshCw size={22} className="spin"/> 正在准备 MyHKU…</div></div>
-  if (!accountConfigured) return <AccountSetup onReady={next => { setAccount(next); setAccountConfigured(true) }} />
-  return <div className="app-shell">
-    <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
-      <div className="brand"><img className="brand-mark" src="./brand/logo.svg" alt="MyHKU"/><span>My<span>HKU</span></span><button className="close-nav" onClick={() => setMobileNav(false)}><X size={18}/></button></div>
-      <div className="workspace"><span className="workspace-label">当前空间</span><strong>学习空间</strong><ChevronDown size={15}/></div>
-      <nav>{navItems.map(({ key, label, icon: Icon }) => <button key={key} className={active === key ? 'active' : ''} onClick={() => { setActive(key); setMobileNav(false) }}><Icon size={18}/><span>{label}</span>{key === 'moodle' && <i className="nav-dot"/>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="login-state"><span className={`state-dot ${dataMode === 'live' && connectedCount === 0 ? 'offline' : ''}`}/> <div><small>HKU 账号</small><strong>{manualConnection?.nativeState === 'needs_2fa' ? '等待身份验证' : Object.values(connections).some(item => item.state === 'checking') ? '正在自动连接 HKU' : accountLabel}</strong></div></div><button className="user-mini"><span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span><span>{account.username || '用户'}</span><ChevronDown size={14}/></button></div>
-    </aside>
-    {mobileNav && <div className="backdrop" onClick={() => setMobileNav(false)}/>} 
-    <main className="main">
-      <header className="topbar"><button className="menu-toggle" onClick={() => setMobileNav(true)}><Menu size={21}/></button><div className="crumb"><span>学习空间</span><b>/</b><strong>{title}</strong></div><div className="top-actions"><label className="search"><Search size={17}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索课程、资料…"/><kbd>⌘ K</kbd></label><button className="icon-btn" aria-label="通知" onClick={() => { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission() }}><Bell size={19}/><i/></button><div className="user"><span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span><span><b>{account.username || '用户'}</b><small>{account.email || 'HKU Student'}</small></span><ChevronDown size={15}/></div></div></header>
-      {manualConnection && <div className="auth-banner"><ShieldCheck size={15}/><span>{manualConnection.detail || '请在 HKU 官方窗口完成登录；完成后会自动回到 MyHKU'}</span></div>}
-      {notice && <div className={`toast ${refreshing ? 'loading' : 'success'}`}>{refreshing ? <RefreshCw className="spin" size={15}/> : <CheckCircle2 size={15}/>} {notice}</div>}
-      <div className="content">
-        <div className="page-heading"><div><p className="eyebrow">{today.weekday} · {today.date}</p><h1>早上好，{account.username || '同学'} <span>✦</span></h1><p className="subtitle">这是你今天的学习概览。</p></div><button className="refresh-btn" onClick={() => sync()} disabled={refreshing}><RefreshCw size={16} className={refreshing ? 'spin' : ''}/>{refreshing ? '同步中…' : '立即刷新'}</button></div>
-        <div className="sync-line"><span><CheckCircle2 size={14}/> {dataMode === 'live' && !liveSnapshot ? '等待自动同步' : dataMode === 'live' && liveError && liveSnapshot ? '显示本地缓存' : '数据已同步'}</span><span>上次更新 {lastSync}</span><span className="sync-policy">打开应用时刷新 · 每日自动更新一次</span></div>
-        {active === 'overview' ? dataMode === 'demo' ? <>
-          <section className="stats"><div className="stat-card"><div className="stat-icon blue"><CalendarDays size={18}/></div><div><small>今日课程</small><strong>2 节</strong></div><span className="stat-trend">+1 比昨天</span></div><div className="stat-card"><div className="stat-icon amber"><Clock3 size={18}/></div><div><small>待完成</small><strong>3 项</strong></div><span className="stat-trend amber-text">1 项今天截止</span></div><div className="stat-card"><div className="stat-icon green"><Trophy size={18}/></div><div><small>当前平均成绩</small><strong>86.4 <em>/ 100</em></strong></div><span className="stat-trend green-text">↑ 2.1</span></div></section>
-          <div className="dashboard-grid"><section className="panel schedule"><div className="panel-head"><div><h2>今日课表</h2><p>{today.date}，{today.weekday}</p></div><button className="text-btn" onClick={() => setActive('calendar')}>查看完整课表 <span>→</span></button></div><div className="class-list">{classes.map(c => <article className="class-item" key={c.code}><div className={`class-time ${c.tone}`}><strong>{c.time}</strong><span>{c.end}</span></div><div className="class-info"><h3>{c.title}</h3><p>{c.code} <span>·</span> {c.teacher}</p></div><div className="room">{c.room}</div></article>)}</div></section><section className="panel deadlines"><div className="panel-head"><div><h2>近期截止</h2><p>来自 Moodle 的待办</p></div><button className="dots">•••</button></div><div className="due-list">{filteredDue.map(i => <article className="due-item" key={i.title}><span className={`due-check ${i.urgent ? 'urgent' : ''}`}>{i.urgent ? '!' : ''}</span><div><h3>{i.title}</h3><p>{i.course}</p></div><time className={i.urgent ? 'urgent-text' : ''}>{i.due}</time></article>)}</div><button className="all-tasks" onClick={() => setActive('moodle')}>查看全部待办 <span>→</span></button></section></div>
-          <section className="panel quick"><div className="quick-title"><Sparkles size={18}/><div><h2>学习快捷入口</h2><p>从上次离开的地方继续</p></div></div><div className="quick-actions"><button onClick={() => setActive('moodle')}><BookOpen size={17}/><span>Moodle 课程</span><small>3 门课程</small></button><button onClick={() => setActive('materials')}><Download size={17}/><span>最近资料</span><small>4 个未读</small></button><button onClick={() => setActive('calendar')}><CalendarDays size={17}/><span>本周课表</span><small>8 节课程</small></button></div></section>
-        </> : <LiveDataPage active={active} snapshot={liveSnapshot} error={liveError} connectionPhase={connectionPhase} onOpenSettings={() => setActive('settings')} onRefresh={sync}/> : active === 'settings' ? <ConnectionSettings mode={dataMode} setMode={mode => { setDataMode(mode); setDataModeState(mode) }} states={connections} setStates={setConnections} onNotice={message => { setNotice(message); window.setTimeout(() => setNotice(''), 4000) }}/> : <LiveDataPage active={active} snapshot={liveSnapshot} error={liveError} connectionPhase={connectionPhase} onOpenSettings={() => setActive('settings')} onRefresh={sync}/>}
-      </div>
-    </main>
-  </div>
-}
-function IconFor({ keyName }: { keyName: NavKey }) { const item = navItems.find(n => n.key === keyName); const I = item?.icon ?? LayoutDashboard; return <I size={25}/> }
-function scheduleDayLabel(item: LiveSnapshot['schedule'][number]): string {
-  const raw = (item.date || item.day || '').trim()
-  if (!raw) return '待确认日期'
-  const parsed = Date.parse(raw)
-  if (!Number.isNaN(parsed)) {
-    return new Intl.DateTimeFormat('zh-CN', { weekday: 'short', month: 'numeric', day: 'numeric' }).format(new Date(parsed))
+  const greeting = hongKongGreeting(now)
+  const today = {
+    weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(now),
+    date: new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', timeZone: 'Asia/Hong_Kong' }).format(now),
   }
-  return raw
-}
+  const pendingCount = activeSnapshot ? activeSnapshot.assignments.filter(a => !a.completed).length : 0
+  const unreadNotifCount = notifFeed.filter(n => !n.read).length
+  const shortcutHint = isApplePlatform() ? '⌘ K' : 'Ctrl K'
 
-function formatWeekRange(week?: LiveSnapshot['scheduleWeek']): string {
-  if (!week?.start || !week.end) return '当前周'
-  const start = new Date(`${week.start}T00:00:00`); const end = new Date(`${week.end}T00:00:00`)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return `${week.start} – ${week.end}`
-  const fmt = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' })
-  return `${fmt.format(start)} – ${fmt.format(end)}`
-}
-function addDays(value: Date, count: number): Date {
-  const next = new Date(value)
-  next.setDate(next.getDate() + count)
-  return next
-}
-
-function calendarWeekStart(snapshot: LiveSnapshot): Date {
-  const raw = snapshot.scheduleWeek?.start || snapshot.schedule.find(item => item.date)?.date
-  const parsed = raw ? new Date(`${raw.slice(0, 10)}T00:00:00`) : new Date()
-  const value = Number.isNaN(parsed.getTime()) ? new Date() : parsed
-  value.setHours(0, 0, 0, 0)
-  if (!snapshot.scheduleWeek) value.setDate(value.getDate() - (value.getDay() + 6) % 7)
-  return value
-}
-
-function parseClockMinutes(value?: string): number | null {
-  const raw = String(value || '').trim()
-  const match = raw.match(/(\d{1,2})(?::|：)(\d{2})\s*(AM|PM)?/i)
-  if (!match) return null
-  let hour = Number(match[1]); const minute = Number(match[2]); const suffix = match[3]?.toUpperCase()
-  if (suffix === 'PM' && hour < 12) hour += 12
-  if (suffix === 'AM' && hour === 12) hour = 0
-  if (hour > 23 || minute > 59) return null
-  return hour * 60 + minute
-}
-
-function scheduleDayIndex(item: LiveSnapshot['schedule'][number], weekStart: Date): number {
-  if (item.date) {
-    const parsed = new Date(`${item.date.slice(0, 10)}T00:00:00`)
-    if (!Number.isNaN(parsed.getTime())) return Math.round((parsed.getTime() - weekStart.getTime()) / 86400000)
-  }
-  const raw = (item.day || '').toLowerCase()
-  const names = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
-  const english = names.findIndex(name => raw.includes(name))
-  if (english >= 0) return (english - weekStart.getDay() + 7) % 7
-  const chinese = ['一', '二', '三', '四', '五', '六', '日']
-  const index = chinese.findIndex(name => raw.includes(`星期${name}`) || raw.includes(`周${name}`))
-  if (index < 0) return index
-  const absolute = index === 6 ? 0 : index + 1
-  return (absolute - weekStart.getDay() + 7) % 7
-}
-
-function CalendarPage({ snapshot, onRefresh }: { snapshot: LiveSnapshot; onRefresh: () => void }) {
-  const [loadingWeek, setLoadingWeek] = useState<number | null>(null)
-  const weekStart = calendarWeekStart(snapshot)
-  const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
-  const events = days.map(() => [] as Array<{ item: LiveSnapshot['schedule'][number]; start: number; end: number }>)
-  const unplaced: LiveSnapshot['schedule'] = []
-  snapshot.schedule.forEach(item => {
-    const date = scheduleDate(item, snapshot.scheduleWeek)
-    const day = scheduleDayIndex(date ? { ...item, date } : item, weekStart)
-    const start = parseClockMinutes(item.start); const parsedEnd = parseClockMinutes(item.end)
-    if (day < 0 || day > 6 || start === null) { unplaced.push(item); return }
-    const end = parsedEnd || start + 60
-    events[day].push({ item, start, end: Math.max(start + 30, end) })
-  })
-  events.forEach(day => day.sort((a, b) => a.start - b.start))
-  const moveWeek = async (offset: number) => {
-    const change = window.myhkuDesktop?.changeScheduleWeek
-    if (!change) { onRefresh(); return }
-    setLoadingWeek(offset)
-    try { await change(offset) } catch { /* main process reports the error through the normal sync state */ }
-    finally { setLoadingWeek(null) }
-  }
-  const formatDay = (day: Date) => new Intl.DateTimeFormat('zh-CN', { weekday: 'short', month: 'numeric', day: 'numeric' }).format(day)
-  const allEvents = events.flat()
-  const firstHour = Math.min(8, ...allEvents.map(event => Math.floor(event.start / 60)))
-  const lastHour = Math.max(19, ...allEvents.map(event => Math.ceil(event.end / 60)))
-  const timeLabels = Array.from({ length: lastHour - firstHour + 1 }, (_, index) => firstHour + index)
-  const gridStart = firstHour * 60; const pixelsPerHour = 120
-  return <section className="panel live-page">
-    <div className="panel-head">
-      <div><h2>我的课表</h2><p>周视图 · {formatWeekRange(snapshot.scheduleWeek)} · {snapshot.schedule.length} 节课程</p></div>
-      <div className="calendar-actions">
-        <button className="text-btn" onClick={() => moveWeek(-1)} disabled={loadingWeek !== null}>上周</button>
-        <button className="text-btn" onClick={() => moveWeek(0)} disabled={loadingWeek !== null}>本周</button>
-        <button className="text-btn" onClick={() => moveWeek(1)} disabled={loadingWeek !== null}>下周</button>
-        <button className="text-btn" onClick={onRefresh} disabled={loadingWeek !== null}><RefreshCw size={13} className={loadingWeek !== null ? 'spin' : ''}/>刷新</button>
-      </div>
-    </div>
-    {loadingWeek !== null && <p className="empty-state">正在加载{loadingWeek < 0 ? '上' : loadingWeek > 0 ? '下' : '本'}周课表…</p>}
-    {loadingWeek === null && <>
-      <div className="schedule-scroll"><div className="schedule-board" style={{ '--hour-height': `${pixelsPerHour}px`, '--grid-hours': lastHour - firstHour } as React.CSSProperties}>
-        <div className="schedule-corner" />
-        {days.map(day => <div className="schedule-day-head" key={day.toISOString()}>{formatDay(day)}{`${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}` === hongKongDate() ? <small>今天</small> : null}</div>)}
-        <div className="schedule-time-axis">{timeLabels.map(hour => <span key={hour} style={{ top: `${(hour - firstHour) * pixelsPerHour - 8}px` }}>{`${String(hour).padStart(2, '0')}:00`}</span>)}</div>
-        {events.map((dayEvents, dayIndex) => <div className="schedule-day-track" key={days[dayIndex].toISOString()} style={{ gridColumn: dayIndex + 2 }}>
-          {timeLabels.slice(0, -1).map(hour => <i className="schedule-hour-line" key={hour} style={{ top: `${(hour - firstHour) * pixelsPerHour}px` }} />)}
-          {dayEvents.map(({ item, start, end }, index) => <article className="schedule-event" key={item.id || `${item.title}-${index}`} style={{ top: `${Math.max(0, start - gridStart) / 60 * pixelsPerHour + 2}px`, height: `${Math.max(28, (Math.min(lastHour * 60, end) - Math.max(gridStart, start)) / 60 * pixelsPerHour - 4)}px` }} title={`${item.title} · ${item.teacher || ''} · ${item.room || ''}`}>
-            <strong>{item.title}</strong><small>{item.start}–{item.end}</small><small>{item.room || '未提供地点'}</small>
-          </article>)}
-        </div>)}
-      </div>
-      </div>
-      {unplaced.length > 0 && <p className="empty-state schedule-unplaced">{unplaced.length} 节课程缺少可定位的日期或时间</p>}
-      {snapshot.schedule.length === 0 && <p className="empty-state">本周没有课表记录</p>}
-    </>}
-  </section>
-}
-function MaterialsPage({ snapshot, onRefresh }: { snapshot: LiveSnapshot; onRefresh: () => void }) {
-  const [downloading, setDownloading] = useState<string | null>(null)
-  const [message, setMessage] = useState('')
-  const groups = new Map<string, LiveSnapshot['resources']>()
-  snapshot.resources.forEach(item => groups.set(item.course, [...(groups.get(item.course) || []), item]))
-  const download = async (id: string, url: string) => {
-    setDownloading(id); setMessage('')
-    try {
-      if (window.myhkuDesktop?.downloadResource) {
-        const count = await window.myhkuDesktop.downloadResource(url)
-        setMessage(`已下载 ${count} 个文件到下载文件夹`)
-      } else {
-        const target = new URL(url)
-        if (target.pathname === '/mod/resource/view.php') target.searchParams.set('redirect', '1')
-        target.searchParams.set('forcedownload', '1')
-        const frame = document.createElement('iframe')
-        frame.hidden = true; frame.src = target.href
-        document.body.appendChild(frame)
-        setTimeout(() => frame.remove(), 60_000)
-        setMessage('已请求下载；若未开始，请使用桌面端并确认 Moodle 已连接')
-      }
-    } catch (error) { setMessage(error instanceof Error ? error.message : '下载失败，请重试') }
-    finally { setDownloading(null) }
-  }
-  return <section className="panel live-page">
-    <div className="panel-head"><div><h2>课程资料</h2><p>按课程分栏 · 文件直接下载</p></div><button className="text-btn" onClick={onRefresh}><RefreshCw size={13}/>刷新</button></div>
-    {message && <p className="download-message" role="status">{message}</p>}
-    <div className="resource-columns">{Array.from(groups, ([course, items]) => <section className="resource-course" key={course}>
-      <h3>{course}<small>{items.length} 项资料</small></h3>
-      {items.map(item => {
-        const url = safeHkuUrl(item.url)
-        const file = url && /\/(?:mod\/(?:resource|folder)\/|pluginfile\.php\/)/.test(new URL(url).pathname)
-        return <div className="resource-row" key={item.id}><FileText size={16}/><span><strong>{item.title}</strong></span>
-          {url ? file ? <button disabled={downloading !== null} onClick={() => download(item.id, url)}><Download size={14}/>{downloading === item.id ? '下载中…' : '下载'}</button> : <a href={url} target="_blank" rel="noreferrer"><ExternalLink size={14}/>查看</a> : <em>无链接</em>}
+  if (!authReady) {
+    return (
+      <div className="account-gate">
+        <div className="account-loading">
+          <RefreshCw size={22} className="spin" /> 正在准备 MyHKU…
         </div>
-      })}
-    </section>)}</div>
-    {!groups.size && <p className="empty-state">暂无可下载资料</p>}
-  </section>
-}
-function LiveDataPage({ active, snapshot, error, connectionPhase, onOpenSettings, onRefresh }: { active: NavKey; snapshot: LiveSnapshot | null; error: string; connectionPhase: ConnectionPhase; onOpenSettings: () => void; onRefresh: () => void }) {
-  if (active === 'overview') return <LiveDataPlaceholder snapshot={snapshot} error={error} connectionPhase={connectionPhase} onOpenSettings={onOpenSettings} onRefresh={onRefresh}/>
-  if (!snapshot) return <LiveDataPlaceholder snapshot={null} error={error} connectionPhase={connectionPhase} onOpenSettings={onOpenSettings} onRefresh={onRefresh}/>
-  if (active === 'calendar') {
-    return <CalendarPage snapshot={snapshot} onRefresh={onRefresh}/>
+      </div>
+    )
   }
-  if (active === 'moodle') return <section className="panel live-page"><div className="panel-head"><div><h2>Moodle</h2><p>{snapshot.courses.length} 门课程 · {snapshot.assignments.filter(item => !item.completed).length} 项待办 · {snapshot.grades.length} 项成绩</p></div><button className="text-btn" onClick={onRefresh}><RefreshCw size={13}/>刷新</button></div><div className="live-columns"><div><h3 className="subheading">课程</h3>{snapshot.courses.length ? snapshot.courses.map(item => <div className="live-row" key={item.id}><BookOpen size={15}/><span>{item.title}{item.code ? ` · ${item.code}` : ''}</span></div>) : <p className="empty-state">暂无课程</p>}</div><div><h3 className="subheading">待办</h3>{snapshot.assignments.length ? snapshot.assignments.map(item => <div className="live-row" key={item.id}><span className={`due-check ${item.completed ? 'done' : ''}`}>{item.completed ? '✓' : ''}</span><span>{item.title}<small>{item.course}</small><small>截止：{item.due || '未提供截止时间'}</small><small>{item.submissionStatus || (item.completed === true ? '已提交' : item.completed === false ? '未提交' : '提交状态未提供')}</small></span></div>) : <p className="empty-state">暂无待办</p>}</div><div><h3 className="subheading">成绩</h3>{snapshot.grades.length ? snapshot.grades.map(item => <div className="live-row" key={item.id}><Trophy size={15}/><span>{item.title}<small>{item.course} · {item.released === false ? '未发布' : item.value || '未提供分数'}</small></span></div>) : <p className="empty-state">暂无可见成绩</p>}</div></div><div className="live-announcements"><h3 className="subheading">公告</h3>{snapshot.announcements.length ? snapshot.announcements.slice(0, 8).map(item => <div className="live-row" key={item.id}><Bell size={15}/><span>{item.url ? <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> : item.title}<small>{item.course}{item.published ? ` · ${item.published}` : ''}</small></span></div>) : <p className="empty-state">暂无公告</p>}</div></section>
-  return <MaterialsPage snapshot={snapshot} onRefresh={onRefresh}/>
-}
-function LiveDataPlaceholder({ snapshot, error, connectionPhase, onOpenSettings, onRefresh }: { snapshot: LiveSnapshot | null; error: string; connectionPhase: ConnectionPhase; onOpenSettings: () => void; onRefresh: () => void }) {
-  if (!snapshot) {
-    const automatic = connectionPhase === 'checking' || connectionPhase === 'connected'
-    const heading = connectionPhase === 'checking' ? '正在自动连接 HKU' : connectionPhase === 'connected' ? 'HKU 已连接，正在读取数据' : connectionPhase === 'manual' ? '等待官方身份验证' : '等待连接 HKU'
-    const detail = connectionPhase === 'checking' ? '正在复用官方登录会话，完成后会自动显示课表和课程。'
-      : connectionPhase === 'connected' ? (error || '登录已完成，课表和课程读取后会自动显示。')
-      : connectionPhase === 'manual' ? '请在官方窗口完成验证，完成后会自动连接并同步数据。'
-      : error || '应用会自动恢复官方会话；可在设置中查看各服务状态。'
-    return <section className="panel placeholder live-placeholder"><div className="placeholder-icon">{automatic ? <RefreshCw size={25} className="spin"/> : <ShieldCheck size={25}/>}</div><h2>{heading}</h2><p>{detail}</p><div className="placeholder-actions"><button className="outline-btn" onClick={onOpenSettings}><Link2 size={16}/>查看连接状态</button>{!automatic && <button className="outline-btn" onClick={onRefresh}><RefreshCw size={15}/>重新检查</button>}</div></section>
+  if (!accountConfigured) {
+    return (
+      <AccountSetup
+        onReady={next => {
+          setAccount(next)
+          setAccountConfigured(true)
+        }}
+      />
+    )
   }
-  const classesLive = todayClasses(snapshot)
-  const pending = snapshot.assignments.filter(item => !item.completed)
-  const dueLive = pending.slice(0, 4)
-  return <><section className="stats"><div className="stat-card"><div className="stat-icon blue"><CalendarDays size={18}/></div><div><small>今日课程</small><strong>{classesLive.length} 节</strong></div></div><div className="stat-card"><div className="stat-icon amber"><Clock3 size={18}/></div><div><small>待完成</small><strong>{pending.length} 项</strong></div></div><div className="stat-card"><div className="stat-icon green"><Trophy size={18}/></div><div><small>已获取成绩</small><strong>{snapshot.grades.length} 项</strong></div></div></section><div className="dashboard-grid"><section className="panel schedule"><div className="panel-head"><div><h2>课表</h2><p>来自 SIS 的真实数据</p></div></div><div className="class-list">{classesLive.length ? classesLive.map(item => <article className="class-item" key={item.id}><div className="class-time blue"><strong>{item.start}</strong><span>{item.end}</span></div><div className="class-info"><h3>{item.title}</h3><p>{item.code || '未提供课程代码'} <span>·</span> {item.teacher || '未提供教师'}</p></div><div className="room">{item.room || '未提供地点'}</div></article>) : <p className="empty-state">今天没有课表记录</p>}</div></section><section className="panel deadlines"><div className="panel-head"><div><h2>待办</h2><p>来自 Moodle 的真实数据</p></div></div><div className="due-list">{dueLive.length ? dueLive.map(item => <article className="due-item" key={item.id}><span className="due-check"/><div><h3>{item.title}</h3><p>{item.course}</p></div><time>{item.due || '未提供截止时间'}</time></article>) : <p className="empty-state">暂无未完成待办</p>}</div></section></div></>
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
+        <div className="brand">
+          <img className="brand-mark" src="./brand/logo.svg" alt="MyHKU" />
+          <span>
+            My<span>HKU</span>
+          </span>
+          <button className="close-nav" onClick={() => setMobileNav(false)} aria-label="关闭导航">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="workspace">
+          <span className="workspace-label">当前数据源</span>
+          <strong>{dataMode === 'demo' ? '演示学习空间' : 'HKU 实时学习空间'}</strong>
+        </div>
+
+        <nav>
+          {navItems.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              className={active === key ? 'active' : ''}
+              onClick={() => handleNavigate(key)}
+            >
+              <Icon size={18} />
+              <span>{label}</span>
+              {key === 'moodle' && pendingCount > 0 && <i className="nav-dot" title={`${pendingCount} 项待办`} />}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-bottom">
+          <div className="login-state">
+            <span className={`state-dot ${dataMode === 'live' && connectedCount === 0 ? 'offline' : ''}`} />
+            <div>
+              <small>HKU 账号</small>
+              <strong>
+                {manualConnection?.nativeState === 'needs_2fa'
+                  ? '等待身份验证'
+                  : Object.values(connections).some(item => item.state === 'checking')
+                    ? '正在自动连接 HKU'
+                    : accountLabel}
+              </strong>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="user-mini"
+            onClick={() => handleNavigate('settings')}
+            title="前往账户与连接设置"
+          >
+            <span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span>
+            <span>{account.username || '本机用户'}</span>
+            <Settings size={13} />
+          </button>
+        </div>
+      </aside>
+
+      {mobileNav && <div className="backdrop" onClick={() => setMobileNav(false)} />}
+
+      <main className="main">
+        <header className="topbar">
+          <button className="menu-toggle" onClick={() => setMobileNav(true)} aria-label="打开菜单">
+            <Menu size={21} />
+          </button>
+          <div className="crumb">
+            <span>学习空间</span>
+            <b>/</b>
+            <strong>{title}</strong>
+          </div>
+          <div className="top-actions">
+            <label className="search">
+              <Search size={17} />
+              <input
+                ref={searchInputRef}
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="搜索课程、课表、作业、资料…"
+              />
+              {query ? (
+                <button type="button" className="clear-search-btn" onClick={() => setQuery('')} aria-label="清除搜索">
+                  <X size={13} />
+                </button>
+              ) : (
+                <kbd>{shortcutHint}</kbd>
+              )}
+            </label>
+
+            <div className="popover-anchor">
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="通知"
+                aria-expanded={notifMenuOpen}
+                onClick={() => {
+                  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                    void Notification.requestPermission()
+                  }
+                  setUserMenuOpen(false)
+                  setNotifMenuOpen(prev => {
+                    const next = !prev
+                    if (next && unreadNotifCount > 0) setNotifFeed(markAllNotificationsRead())
+                    return next
+                  })
+                }}
+              >
+                <Bell size={19} />
+                {unreadNotifCount > 0 && <i />}
+              </button>
+
+              {notifMenuOpen && (
+                <div className="dropdown-panel notif-dropdown" role="dialog" aria-label="最近提醒">
+                  <div className="dropdown-head">
+                    <strong>本地同步与截止提醒</strong>
+                    <button type="button" className="text-btn" onClick={() => setNotifMenuOpen(false)}>
+                      关闭
+                    </button>
+                  </div>
+                  {notifFeed.length ? (
+                    <div className="notif-list">
+                      {notifFeed.slice(0, 8).map(item => (
+                        <button
+                          type="button"
+                          key={item.id}
+                          className="notif-item"
+                          onClick={() => handleNavigate(item.target, item.course)}
+                        >
+                          <strong>{item.title}</strong>
+                          <span>{item.body}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="dropdown-empty">暂无新增变更或临近截止提醒</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="popover-anchor">
+              <button
+                type="button"
+                className="user user-btn"
+                aria-expanded={userMenuOpen}
+                onClick={() => {
+                  setNotifMenuOpen(false)
+                  setUserMenuOpen(prev => !prev)
+                }}
+              >
+                <span className="avatar">{(account.username || '学').slice(0, 1).toUpperCase()}</span>
+                <span>
+                  <b>{account.username || '本机用户'}</b>
+                  <small>{account.email || (dataMode === 'demo' ? '演示模式' : 'HKU Student')}</small>
+                </span>
+                <ChevronDown size={15} />
+              </button>
+
+              {userMenuOpen && (
+                <div className="dropdown-panel user-dropdown" role="menu">
+                  <button type="button" role="menuitem" onClick={() => handleNavigate('settings')}>
+                    <Settings size={14} /> 连接与外观设置
+                  </button>
+                  {Boolean(window.myhkuDesktop?.saveAccount) && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setUserMenuOpen(false)
+                        setEditingAccount(true)
+                      }}
+                    >
+                      <KeyRound size={14} /> 修改 HKU 账号凭据
+                    </button>
+                  )}
+                  <button type="button" role="menuitem" className="danger-item" onClick={() => void handleSignOut()}>
+                    <LogOut size={14} /> 退出账号并清除缓存
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </header>
+
+        {manualConnection && (
+          <div className="auth-banner">
+            <ShieldCheck size={15} />
+            <span>{manualConnection.detail || '请在 HKU 官方窗口完成登录；完成后会自动回到 MyHKU'}</span>
+          </div>
+        )}
+
+        {notice && (
+          <div className={`toast ${refreshing ? 'loading' : 'success'}`}>
+            {refreshing ? <RefreshCw className="spin" size={15} /> : <CheckCircle2 size={15} />} {notice}
+          </div>
+        )}
+
+        <div className="content">
+          <div className="page-heading">
+            <div>
+              <p className="eyebrow">
+                {today.weekday} · {today.date}
+              </p>
+              <h1>
+                {greeting}，{account.username || '同学'} <span>✦</span>
+              </h1>
+              <p className="subtitle">
+                {dataMode === 'demo' ? '当前展示隔离演示数据；可在设置中切换至真实模式。' : '这是你最新的 HKU 学习空间概览。'}
+              </p>
+            </div>
+            <button className="refresh-btn" onClick={() => sync()} disabled={refreshing}>
+              <RefreshCw size={16} className={refreshing ? 'spin' : ''} />
+              {refreshing ? '同步中…' : '立即刷新'}
+            </button>
+          </div>
+
+          <div className="sync-line">
+            <span>
+              <CheckCircle2 size={14} />{' '}
+              {dataMode === 'demo'
+                ? '演示样例就绪'
+                : !liveSnapshot
+                  ? '等待自动同步'
+                  : liveError
+                    ? '显示本地缓存'
+                    : '数据已同步'}
+            </span>
+            <span>上次更新 {dataMode === 'demo' ? '内置示例' : lastSync}</span>
+            <span className="sync-policy">打开应用时刷新 · 每日自动更新一次</span>
+          </div>
+
+          {active === 'overview' && (
+            <OverviewPage
+              snapshot={activeSnapshot}
+              dataMode={dataMode}
+              query={query}
+              error={liveError}
+              connectionPhase={connectionPhase}
+              todayLabel={today}
+              onNavigate={target => handleNavigate(target)}
+              onSelectCourse={course => handleNavigate('moodle', course)}
+              onRefresh={() => sync()}
+            />
+          )}
+
+          {active === 'calendar' &&
+            (activeSnapshot ? (
+              <CalendarPage
+                snapshot={activeSnapshot}
+                query={query}
+                onRefresh={() => sync()}
+                onNotice={msg => showToast(msg, 4000)}
+              />
+            ) : (
+              <OverviewPage
+                snapshot={null}
+                dataMode={dataMode}
+                query={query}
+                error={liveError}
+                connectionPhase={connectionPhase}
+                todayLabel={today}
+                onNavigate={target => handleNavigate(target)}
+                onSelectCourse={course => handleNavigate('moodle', course)}
+                onRefresh={() => sync()}
+              />
+            ))}
+
+          {active === 'moodle' &&
+            (activeSnapshot ? (
+              <MoodlePage
+                snapshot={activeSnapshot}
+                query={query}
+                selectedCourseId={selectedCourseId}
+                onSelectCourse={setSelectedCourseId}
+                onOpenMaterials={() => handleNavigate('materials')}
+                onRefresh={() => sync()}
+              />
+            ) : (
+              <OverviewPage
+                snapshot={null}
+                dataMode={dataMode}
+                query={query}
+                error={liveError}
+                connectionPhase={connectionPhase}
+                todayLabel={today}
+                onNavigate={target => handleNavigate(target)}
+                onSelectCourse={course => handleNavigate('moodle', course)}
+                onRefresh={() => sync()}
+              />
+            ))}
+
+          {active === 'materials' &&
+            (activeSnapshot ? (
+              <MaterialsPage
+                snapshot={activeSnapshot}
+                dataMode={dataMode}
+                query={query}
+                onRefresh={() => sync()}
+              />
+            ) : (
+              <OverviewPage
+                snapshot={null}
+                dataMode={dataMode}
+                query={query}
+                error={liveError}
+                connectionPhase={connectionPhase}
+                todayLabel={today}
+                onNavigate={target => handleNavigate(target)}
+                onSelectCourse={course => handleNavigate('moodle', course)}
+                onRefresh={() => sync()}
+              />
+            ))}
+
+          {active === 'settings' && (
+            <SettingsPage
+              mode={dataMode}
+              setMode={mode => {
+                setDataMode(mode)
+                setDataModeState(mode)
+              }}
+              theme={themeMode}
+              setTheme={theme => {
+                setThemeMode(theme)
+                setThemeModeState(theme)
+              }}
+              states={connections}
+              setStates={setConnections}
+              account={account}
+              onEditAccount={() => setEditingAccount(true)}
+              onSignOut={handleSignOut}
+              onNotice={msg => showToast(msg, 4000)}
+            />
+          )}
+        </div>
+      </main>
+
+      {editingAccount && (
+        <AccountSetup
+          modal
+          initialUsername={account.username || ''}
+          initialEmail={account.email || ''}
+          onCancel={() => setEditingAccount(false)}
+          onReady={next => {
+            setAccount(next)
+            setAccountConfigured(true)
+            setEditingAccount(false)
+            showToast('账户已更新，正在重新连接官方服务')
+          }}
+        />
+      )}
+    </div>
+  )
 }
-createRoot(document.getElementById('root')!).render(<StrictMode><LegalGate><App /></LegalGate></StrictMode>)
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <LegalGate>
+      <App />
+    </LegalGate>
+  </StrictMode>,
+)

@@ -43,8 +43,10 @@ const allowedHosts = new Set([
 ])
 let bridgeProcess
 let uiServer
+let activeUiPort = Number(uiPort) || 17322
 let dashboard
 const authWindows = new Set()
+const sessionDownloadedPaths = new Set()
 const windowFlows = new WeakMap()
 const auth = new AuthCoordinator(startServiceLogin, publishAuthStatus)
 let quitting = false
@@ -88,10 +90,20 @@ async function resetAccountSessions() {
   // Destroy old documents before clearing cookies: a late callback must not
   // recreate the signed-out account's session or update a replacement record.
   auth.reset()
+  sessionDownloadedPaths.clear()
   for (const win of authWindows) if (!win.isDestroyed()) win.destroy()
   const official = (await import('electron')).session.fromPartition('persist:myhku-hku')
   await official.clearStorageData()
   await official.clearAuthCache()
+  for (const name of ['myhku-cache.enc.json', 'myhku-cache.key']) {
+    try { unlinkSync(join(app.getPath('userData'), name)) } catch { /* already absent */ }
+  }
+  if (servicesStarted) {
+    await fetch(`http://127.0.0.1:${bridgePort}/api/reset`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(3000),
+    }).catch(() => { /* bridge may still be starting */ })
+  }
 }
 
 function notifyAuthStatus(payload) {
@@ -546,15 +558,15 @@ function createDashboard() {
   })
   attachDownloadHandler(dashboard)
   if (devUrl) dashboard.loadURL(devUrl)
-  else dashboard.loadURL(`http://127.0.0.1:${uiPort}/`)
+  else dashboard.loadURL(`http://127.0.0.1:${activeUiPort}/`)
 }
 
-function startDashboardServer() {
+async function startDashboardServer() {
   if (devUrl) return
   const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' }
-  uiServer = http.createServer((req, res) => {
+  const createHandler = (req, res) => {
     try {
-      const rawPath = decodeURIComponent(new URL(req.url || '/', `http://127.0.0.1:${uiPort}`).pathname)
+      const rawPath = decodeURIComponent(new URL(req.url || '/', `http://127.0.0.1:${activeUiPort}`).pathname)
       const relative = rawPath === '/' ? 'index.html' : rawPath.replace(/^\/+/, '')
       if (relative.split('/').includes('..')) { res.writeHead(400); res.end('Bad path'); return }
       const candidate = join(sourceRoot, 'dist', relative)
@@ -565,8 +577,23 @@ function startDashboardServer() {
     } catch {
       res.writeHead(404); res.end('Not found')
     }
+  }
+  const listenOn = port => new Promise((resolve, reject) => {
+    const srv = http.createServer(createHandler)
+    srv.once('error', reject)
+    srv.listen(port, '127.0.0.1', () => {
+      srv.removeListener('error', reject)
+      resolve(srv)
+    })
   })
-  uiServer.listen(Number(uiPort), '127.0.0.1')
+  try {
+    uiServer = await listenOn(Number(uiPort) || 17322)
+  } catch (error) {
+    if (error?.code !== 'EADDRINUSE') throw error
+    uiServer = await listenOn(0)
+  }
+  const addr = uiServer.address()
+  if (addr && typeof addr === 'object') activeUiPort = addr.port
 }
 
 function handleDashboard(channel, handler) {
@@ -641,7 +668,7 @@ handleDashboard('myhku-refresh-hku', () => {
   return authWindows.size
 })
 
-handleDashboard('myhku-download-resource', async (_event, url) => {
+async function performMoodleDownload(url) {
   const authenticated = session.fromPartition('persist:myhku-hku')
   const parser = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
   try {
@@ -649,16 +676,50 @@ handleDashboard('myhku-download-resource', async (_event, url) => {
     const fetchPage = value => authenticated.fetch(value, { redirect: 'manual', signal: AbortSignal.timeout(120_000) })
     const urls = await resolveMoodleDownloads(String(url), fetchPage,
       (html, base) => parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`))
-    for (const file of urls) await saveMoodleDownload(file, app.getPath('downloads'), fetchPage)
-    return urls.length
+    const directory = app.getPath('downloads')
+    const paths = []
+    for (const file of urls) {
+      const savedPath = await saveMoodleDownload(file, directory, fetchPage)
+      sessionDownloadedPaths.add(savedPath)
+      paths.push(savedPath)
+    }
+    return { count: paths.length, paths, directory }
   } finally { parser.destroy() }
+}
+
+handleDashboard('myhku-download-resource', async (_event, url) => {
+  const result = await performMoodleDownload(url)
+  return result.count
+})
+
+handleDashboard('myhku-download-resource-detailed', async (_event, url) => performMoodleDownload(url))
+
+handleDashboard('myhku-open-downloaded-file', async (_event, targetPath) => {
+  const resolved = String(targetPath || '')
+  if (!sessionDownloadedPaths.has(resolved) || !existsSync(resolved)) {
+    throw new Error('找不到该已下载文件，可能已被移动或删除')
+  }
+  const errorMessage = await shell.openPath(resolved)
+  if (errorMessage) throw new Error(errorMessage)
+  return true
+})
+
+handleDashboard('myhku-reveal-downloaded-file', async (_event, targetPath) => {
+  const resolved = String(targetPath || '')
+  if (!sessionDownloadedPaths.has(resolved) || !existsSync(resolved)) {
+    throw new Error('找不到该已下载文件，可能已被移动或删除')
+  }
+  shell.showItemInFolder(resolved)
+  return true
 })
 
 handleDashboard('myhku-schedule-week', async (_event, rawOffset) => {
   const offset = Math.max(-1, Math.min(1, Number(rawOffset) || 0))
   const record = auth.request('sis')
   const sisWindow = record.window
-  if (!sisWindow || record.state !== 'connected') throw new Error('SIS 正在自动连接，完成后即可切换周次')
+  if (!sisWindow || sisWindow.isDestroyed() || record.state !== 'connected') {
+    throw new Error('SIS 正在自动连接，完成后即可切换周次')
+  }
   if (sisWindow.webContents.isLoading()) {
     await new Promise(resolve => {
       const timer = setTimeout(resolve, 15_000)
@@ -669,36 +730,40 @@ handleDashboard('myhku-schedule-week', async (_event, rawOffset) => {
     await sisWindow.loadURL(SERVICE_URLS.sis)
     return true
   }
-  // PeopleSoft renders the timetable controls inside the same-origin
-  // #ptifrmtgtframe iframe.  The top document only contains the portal shell,
-  // so submit() on a guessed top-level form silently fails.  Click the real
-  // input control so PeopleSoft's own navigation handlers run and preserve
-  // its session state.
   const control = offset > 0 ? 'DERIVED_CLASS_S_SSR_NEXT_WEEK' : 'DERIVED_CLASS_S_SSR_PREV_WEEK'
-  const clicked = await sisWindow.webContents.executeJavaScript(`(() => {
-    const frame = document.querySelector('#ptifrmtgtframe')
-    const doc = frame?.contentDocument || document
-    const pattern = ${offset > 0 ? '/next\\s*week|下(?:一)?周/i' : '/prev(?:ious)?\\s*week|上(?:一)?周/i'}
-    const button = doc.querySelector('[name="${control}"]') || Array.from(doc.querySelectorAll('button, input[type="button"], input[type="submit"], a[href]')).find(node => pattern.test(node.textContent || node.value || node.getAttribute('aria-label') || ''))
-    if (!button) throw new Error('SIS 周切换按钮不可用')
-    button.click()
-    return true
-  })()`, true)
-  if (!clicked) throw new Error('SIS 周切换按钮不可用')
-  // PeopleSoft may update the iframe through an in-place postback without a
-  // frame navigation event. Re-run the read-only connector after the DOM has
-  // settled so the bridge receives the newly selected week's schedule.
+  const patternSource = offset > 0 ? 'next\\s*week|下一?周|下週|next\\s*7' : 'prev(?:ious)?\\s*week|上一?周|上週|prev\\s*7'
+  const clickScript = `(() => {
+    const pattern = new RegExp(${JSON.stringify(patternSource)}, 'i')
+    const docs = [document]
+    for (const doc of docs) {
+      for (const frame of Array.from(doc.querySelectorAll('iframe, frame'))) {
+        try { if (frame.contentDocument && !docs.includes(frame.contentDocument)) docs.push(frame.contentDocument) } catch {}
+      }
+    }
+    for (const doc of docs) {
+      const button = doc.querySelector('[name="${control}"]') ||
+        Array.from(doc.querySelectorAll('button, input[type="button"], input[type="submit"], a[href]'))
+          .find(node => pattern.test(\`\${node.textContent || ''} \${node.value || ''} \${node.getAttribute('aria-label') || ''} \${node.getAttribute('title') || ''}\`))
+      if (button) { button.click(); return true }
+    }
+    return false
+  })()`
+  const framesToTry = [sisWindow.webContents.mainFrame, ...serviceFrames(sisWindow, 'sis')]
+  let clicked = false
+  for (const frame of framesToTry) {
+    try {
+      if (await frame.executeJavaScript(clickScript, true)) { clicked = true; break }
+    } catch { /* try next frame */ }
+  }
+  if (!clicked) throw new Error('当前 SIS 页面未找到上/下周切换按钮')
   setTimeout(() => {
     if (sisWindow.isDestroyed()) return
-    const frame = sisWindow.webContents.mainFrame?.frames?.find(candidate =>
-      /(?:sis-main|sweb|intraweb)\.hku\.hk/i.test(candidate.url) && /\/psc\//i.test(candidate.url),
-    ) || sisWindow.webContents.mainFrame
-    frame?.executeJavaScript(connectorScript(), true).catch(() => {})
-    setTimeout(() => {
-      if (!dashboard || dashboard.isDestroyed()) return
-      try { dashboard.webContents.send('myhku-hku-updated', { at: new Date().toISOString() }) } catch { /* dashboard may be closing */ }
-    }, 2500)
-  }, 1500)
+    const activeFrames = [sisWindow.webContents.mainFrame, ...serviceFrames(sisWindow, 'sis')]
+    for (const frame of activeFrames) {
+      if (frame && isAllowedUrl(frame.url)) void publishPage(frame)
+    }
+    setTimeout(() => notifyDashboard(), 1500)
+  }, 1200)
   return true
 })
 
@@ -711,9 +776,9 @@ app.on('second-instance', () => {
   dashboard.focus()
 })
 
-if (ownsInstance) app.whenReady().then(() => {
+if (ownsInstance) app.whenReady().then(async () => {
   app.setAppUserModelId('hk.my.myhku')
-  startDashboardServer()
+  await startDashboardServer()
   createDashboard()
   startConsentedServices()
   app.on('activate', () => { if (!dashboard || dashboard.isDestroyed()) createDashboard() })

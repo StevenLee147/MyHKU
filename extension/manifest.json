@@ -9,7 +9,9 @@
         "https://moodle.hku.hk/*",
         "https://studentportal.hku.hk/*",
         "https://hkuportal.hku.hk/*",
-        "https://sis-main.hku.hk/*"
+        "https://sis-main.hku.hk/*",
+        "https://sweb.hku.hk/*",
+        "https://intraweb.hku.hk/*"
       ],
       "js": [
         "content.js"
@@ -22,6 +24,8 @@
     "https://studentportal.hku.hk/*",
     "https://hkuportal.hku.hk/*",
     "https://sis-main.hku.hk/*",
+    "https://sweb.hku.hk/*",
+    "https://intraweb.hku.hk/*",
     "http://127.0.0.1:17321/*"
   ],
   "permissions": [],

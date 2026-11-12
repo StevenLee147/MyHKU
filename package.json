@@ -1,13 +1,14 @@
 {
   "name": "myhku-dashboard",
   "private": true,
-  "version": "0.2.1-alpha",
+  "version": "0.2.2-alpha",
   "description": "HKU Portal, SIS and Moodle learning dashboard",
   "author": "MyHKU",
   "main": "desktop/main.mjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "npm run test:privacy && node --test scripts/bridge-and-schedule.test.mjs && npm run bridge:cdp:test && npm run test:macos-release",
     "check:privacy": "node scripts/check-privacy.mjs",
     "test:privacy": "node --test scripts/check-privacy.test.mjs",
     "test:learning-data": "npm run build:web && node scripts/test-learning-data.mjs",
@@ -32,19 +33,19 @@
     "generate:branding": "node scripts/generate-branding.mjs"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
     "lucide-react": "^0.468.0",
-    "react": "latest",
-    "react-dom": "latest",
-    "typescript": "latest",
-    "vite": "latest"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
     "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
   },
   "build": {
     "appId": "hk.my.myhku",
@@ -124,5 +125,5 @@
       }
     }
   },
-  "androidVersionCode": 6
+  "androidVersionCode": 7
 }

@@ -28,7 +28,7 @@ const ALLOWED_HOSTS = new Set(['moodle.hku.hk', 'studentportal.hku.hk', 'hkuport
 const SITE_URLS = {
   moodle: 'https://moodle.hku.hk/',
   portal: 'https://studentportal.hku.hk/',
-  sis: 'https://sis-main.hku.hk/psp/sisprod/EMPLOYEE/PSFT_CS/c/SA_LEARNER_SERVICES.SSR_SSENRL_SCHD_W.GBL?pslnkid=Z_HC_SSR_SSENRL_SCHD_W_LNK',
+  sis: 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable',
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -254,11 +254,13 @@ async function ensureSiteTabs(browser, port) {
 function extractorSource() {
   const source = fs.readFileSync(EXTENSION_SOURCE, 'utf8')
   // The extension's adapter is deliberately the single source of truth. Its
-  // normal entry point posts to the bridge; for CDP we replace only that call
-  // with a return value. This keeps both connectors on the same parser.
-  const marker = /\n\s*publish\(\)\s*\n\}\)\(\)\s*;?\s*$/
+  // normal entry point posts to the bridge and returns a Promise resolving to
+  // the normalized payload; for CDP we suppress the browser-side loopback POST
+  // and read the resolved payload directly over CDP.
+  const marker = /\n\s*(?:return\s+)?publish\(\)\s*\n\}\)\(\)\s*;?\s*$/
   if (!marker.test(source)) throw new Error('extension/content.js 的 adapter 入口结构已改变，CDP 连接器需要更新')
-  return source.replace(marker, "\n  return site === 'moodle' ? extractMoodle() : { schedule: extractSis(), scheduleWeek: (() => { const raw = String(document.body?.textContent || document.documentElement?.textContent || ''); const match = raw.match(/Week\\s+of\\s+(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})\\s*[-–]\\s*(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/i); if (!match) return undefined; const iso = (d, m, y) => y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0'); return { start: iso(Number(match[1]), Number(match[2]), Number(match[3])), end: iso(Number(match[4]), Number(match[5]), Number(match[6])) } })() }\n})()")
+  const trimmed = source.trim().replace(/;$/, '')
+  return `(async () => { const prev = globalThis.__MYHKU_SKIP_POST__; globalThis.__MYHKU_SKIP_POST__ = true; try { return await ${trimmed}; } finally { if (prev === undefined) delete globalThis.__MYHKU_SKIP_POST__; else globalThis.__MYHKU_SKIP_POST__ = prev; } })()`
 }
 
 const EXTRACTOR_SOURCE = extractorSource()
@@ -340,12 +342,14 @@ async function syncTarget(bridgeUrl, target, { extract = true } = {}) {
   } catch (error) {
     return { site, connected: false, error: `解析页面失败：${error.message}` }
   }
-  const payload = { connected: true, detail: detailFor(site, metadata, true) }
-  if (site === 'sis' && Array.isArray(data?.schedule) && data.schedule.length > 0) payload.replaceFields = ['schedule']
+  const payload = { connected: data?.connected !== false, detail: detailFor(site, metadata, data?.connected !== false) }
+  if (Array.isArray(data?.replaceFields)) payload.replaceFields = data.replaceFields
+  else if (site === 'sis' && Array.isArray(data?.schedule) && data.schedule.length > 0) payload.replaceFields = ['schedule']
   for (const field of ['schedule', 'courses', 'assignments', 'announcements', 'resources', 'grades']) {
     if (Array.isArray(data?.[field])) payload[field] = data[field]
   }
   if (data?.scheduleWeek && typeof data.scheduleWeek.start === 'string' && typeof data.scheduleWeek.end === 'string') payload.scheduleWeek = data.scheduleWeek
+  if (Array.isArray(data?.scheduleWeeks) && data.scheduleWeeks.length > 0) payload.scheduleWeeks = data.scheduleWeeks
   const count = ['schedule', 'courses', 'assignments', 'announcements', 'resources', 'grades'].reduce((sum, field) => sum + (payload[field]?.length || 0), 0)
   if (count === 0) payload.detail += '；当前页面没有可识别的数据'
   const result = await postIngest(bridgeUrl, site, payload)
@@ -397,7 +401,9 @@ async function ensureBridge(bridgeUrl) {
 }
 
 function runSelfTest() {
-  if (!EXTRACTOR_SOURCE.includes('return site ===')) throw new Error('DOM adapter return hook missing')
+  if (!EXTRACTOR_SOURCE.includes('__MYHKU_SKIP_POST__') || !EXTRACTOR_SOURCE.includes('return publish()')) {
+    throw new Error('DOM adapter return hook missing')
+  }
   // Parse the exact expression sent to Runtime.evaluate. This catches a
   // malformed adapter edit without requiring a browser or an HKU account.
   // eslint-disable-next-line no-new-func

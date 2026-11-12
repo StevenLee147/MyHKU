@@ -61,6 +61,10 @@ xattr -dr com.apple.quarantine /Applications/MyHKU.app
 
 首次启动（或协议版本变化时）先阅读并逐项同意用户协议、隐私说明及免责声明；确认前不启动官方登录或同步，可在设置中重读。桌面端随后显示本地账户向导；保存账户后，在打开的 **HKU 官方 Portal / Moodle 登录窗口**中完成 SSO 和首次 MFA / 2FA。应用不会替你绕过验证；会话过期时需再次在官方窗口登录。完成后返回仪表盘并同步课程数据。
 
+## 宣传影片
+
+**Less searching. More learning.** — 48 秒、1080p 的原创宣传片，包含中英双语标题、真实界面的示例数据画面和原创配乐。可编辑工程、渲染命令与素材说明见 [`promo-video/README.md`](promo-video/README.md)。渲染后的视频与封面位于 `promo-video/out/`。
+
 ## 运行
 
 ```bash
@@ -166,7 +170,7 @@ npm run bridge:cdp:once
 
 无需启动 Chrome 即可检查连接器源码和 HKU host 白名单：`npm run bridge:cdp:test`。
 
-可用参数：`--chrome <path>` 指定 Chrome/Chromium，`--profile <path>` 指定会话目录，`--port <n>` 指定 CDP 端口，`--no-launch` 连接已用该端口启动的浏览器，`--watch-ms <n>` 和 `--refresh-ms <n>` 调整检查/刷新间隔。默认使用 Node 22 的内置 WebSocket，不需要额外 CDP 依赖。连接器只允许 `moodle.hku.hk`、`studentportal.hku.hk` 和 `hkuportal.hku.hk` 页面；其他标签页不会被读取。
+可用参数：`--chrome <path>` 指定 Chrome/Chromium，`--profile <path>` 指定会话目录，`--port <n>` 指定 CDP 端口，`--no-launch` 连接已用该端口启动的浏览器，`--watch-ms <n>` 和 `--refresh-ms <n>` 调整检查/刷新间隔。默认使用 Node 22 的内置 WebSocket，不需要额外 CDP 依赖。连接器只允许 `moodle.hku.hk`、`studentportal.hku.hk`、`sweb.hku.hk`、`sis-main.hku.hk`、`intraweb.hku.hk` 和 `hkuportal.hku.hk` 页面；其他标签页不会被读取。
 
 如果要连接自己已经用远程调试启动的 Chrome，请先关闭同一 profile 的其他 Chrome 进程，再用独立 profile 启动（Windows 示例）：
 

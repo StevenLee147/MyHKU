@@ -1,34 +1,59 @@
 package hk.my.myhku
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.text.TextUtils
+import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.URLUtil
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.webkit.WebSettings
 import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.CheckBox
+import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import androidx.webkit.WebViewAssetLoader
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Android host for the official HKU sites.
- * SSO/MFA happens inside the official pages. We never inspect passwords or cookies.
+ * Android host for the MyHKU React dashboard and official HKU WebView.
+ * SSO/MFA happens inside the official pages. Passwords and cookies are never
+ * read into normalized snapshots.
  */
 class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var dashboard: WebView
+    private lateinit var officialPanel: LinearLayout
     private lateinit var status: TextView
+    private lateinit var assetLoader: WebViewAssetLoader
     private var snapshotPrefs: android.content.SharedPreferences? = null
-    private var latestPayload = "{\"version\":1,\"status\":\"no_data\"}"
+    private var latestPayload = "{\"version\":4,\"connected\":false}"
     private val sitePayloads = mutableMapOf<String, String>()
+    private val connectorSource: String by lazy {
+        val raw = runCatching {
+            assets.open("dashboard-app/hku-connector.js").bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+        if (raw.isBlank()) ""
+        else "(async () => { globalThis.__MYHKU_SKIP_POST__ = true; try { await $raw; } catch (_) {} })()"
+    }
 
     private val allowedHosts = setOf(
         "moodle.hku.hk", "studentportal.hku.hk", "hkuportal.hku.hk",
@@ -37,10 +62,12 @@ class MainActivity : AppCompatActivity() {
         "login.live.com", "account.live.com", "account.microsoft.com"
     )
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!hasLegalConsent()) { showLegalAgreement { initializeApp(savedInstanceState) }; return }
+        if (!hasLegalConsent()) {
+            showLegalAgreement { initializeApp(savedInstanceState) }
+            return
+        }
         initializeApp(savedInstanceState)
     }
 
@@ -50,7 +77,7 @@ class MainActivity : AppCompatActivity() {
     private fun showLegalAgreement(onAccepted: () -> Unit) {
         val legal = legalDocuments()
         val documents = legal.getJSONArray("documents")
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 24, 32, 24) }
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(36, 28, 36, 28) }
         content.addView(TextView(this).apply { text = "MyHKU · 使用须知"; textSize = 24f })
         content.addView(TextView(this).apply { text = "独立开发的学习工具，非 HKU 官方应用。请阅读并逐项确认。协议版本：${legal.getString("version")}"; textSize = 15f })
         val checks = mutableListOf<CheckBox>()
@@ -70,15 +97,61 @@ class MainActivity : AppCompatActivity() {
         content.addView(Button(this).apply { text = "不同意并退出"; setOnClickListener { finish() } })
         accept.setOnClickListener {
             if (!checks.all { it.isChecked }) return@setOnClickListener
-            val saved = getSharedPreferences("myhku_legal", MODE_PRIVATE).edit().putString("version", legal.getString("version")).putLong("acceptedAt", System.currentTimeMillis()).commit()
-            if (saved) onAccepted() else android.widget.Toast.makeText(this, "无法保存协议确认，请重试", android.widget.Toast.LENGTH_LONG).show()
+            val saved = getSharedPreferences("myhku_legal", MODE_PRIVATE).edit()
+                .putString("version", legal.getString("version"))
+                .putLong("acceptedAt", System.currentTimeMillis())
+                .commit()
+            if (saved) onAccepted() else Toast.makeText(this, "无法保存协议确认，请重试", Toast.LENGTH_LONG).show()
         }
         setContentView(ScrollView(this).apply { addView(content) })
     }
 
+    private fun isAllowedHost(host: String?): Boolean {
+        val clean = host?.lowercase() ?: return false
+        return allowedHosts.any { clean == it || clean.endsWith(".$it") }
+    }
+
+    private fun isHkuDownloadUrl(rawUrl: String): Boolean {
+        val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return false
+        val host = uri.host?.lowercase() ?: return false
+        return uri.scheme == "https" && (host == "hku.hk" || host.endsWith(".hku.hk"))
+    }
+
+    private fun enqueueAuthenticatedDownload(url: String, userAgent: String? = null, contentDisposition: String? = null, mimeType: String? = null): Boolean {
+        if (!isHkuDownloadUrl(url)) return false
+        return runCatching {
+            val uri = Uri.parse(url)
+            val filename = URLUtil.guessFileName(url, contentDisposition, mimeType).ifBlank { "myhku-download" }
+            val request = DownloadManager.Request(uri).apply {
+                val cookie = CookieManager.getInstance().getCookie(url)
+                if (!cookie.isNullOrBlank()) addRequestHeader("Cookie", cookie)
+                if (!userAgent.isNullOrBlank()) addRequestHeader("User-Agent", userAgent)
+                setTitle(filename)
+                setDescription("MyHKU 课程资料下载")
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                try {
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
+                } catch (_: SecurityException) {
+                    setDestinationInExternalFilesDir(this@MainActivity, Environment.DIRECTORY_DOWNLOADS, filename)
+                }
+            }
+            val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            dm.enqueue(request)
+            runOnUiThread {
+                Toast.makeText(this, "已加入系统下载：$filename", Toast.LENGTH_SHORT).show()
+            }
+            true
+        }.getOrDefault(false)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun initializeApp(savedInstanceState: Bundle?) {
-        CookieManager.getInstance().setAcceptCookie(true)
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
         snapshotPrefs = runCatching {
             val key = MasterKey.Builder(this).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
             EncryptedSharedPreferences.create(
@@ -89,40 +162,90 @@ class MainActivity : AppCompatActivity() {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
             )
         }.getOrNull()
-        latestPayload = snapshotPrefs?.getString("latest", latestPayload) ?: latestPayload
+
         for (site in listOf("moodle", "portal", "sis")) {
             snapshotPrefs?.getString(site, null)?.let { sitePayloads[site] = it }
         }
         latestPayload = combinePayloads()
 
-        val root = LinearLayout(this).apply {
+        val container = FrameLayout(this)
+
+        val sharedDashboardBridge = DashboardBridge()
+        dashboard = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            addJavascriptInterface(sharedDashboardBridge, "myhkuAndroid")
+            addJavascriptInterface(sharedDashboardBridge, "MyHKUDashboard")
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                    return assetLoader.shouldInterceptRequest(request.url)
+                }
+
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    val uri = request.url
+                    if (uri.host == "appassets.androidplatform.net") return false
+                    if (uri.scheme == "https" && isAllowedHost(uri.host)) {
+                        showOfficial(uri.toString())
+                        return true
+                    }
+                    if (uri.scheme == "https" || uri.scheme == "http") {
+                        runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                    }
+                    return true
+                }
+            }
+        }
+        container.addView(dashboard, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
+
+        officialPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(12, 8, 12, 0)
+            visibility = View.GONE
+            setBackgroundColor(0xFFF4F7FB.toInt())
         }
-        val toolbar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        status = TextView(this).apply { text = "MyHKU · ready"; setPadding(0, 8, 8, 8) }
-        val refresh = Button(this).apply {
-            text = "刷新"
-            setOnClickListener { refreshHkuPages() }
+        val toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(16, 12, 16, 12)
+            setBackgroundColor(0xFF0E2033.toInt())
         }
-        val moodle = Button(this).apply {
-            text = "Moodle"
-            setOnClickListener { showOfficial(MOODLE_URL) }
-        }
-        val portal = Button(this).apply {
-            text = "Portal / SIS"
-            setOnClickListener { showOfficial(PORTAL_URL) }
-        }
-        val home = Button(this).apply {
-            text = "概览"
+        val backBtn = Button(this).apply {
+            text = "← 仪表盘"
             setOnClickListener { showDashboard() }
         }
+        status = TextView(this).apply {
+            text = "HKU 官方页面"
+            setTextColor(0xFFE2ECF5.toInt())
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(16, 0, 12, 0)
+        }
+        val portalBtn = Button(this).apply {
+            text = "Portal/SIS"
+            setOnClickListener { showOfficial(PORTAL_URL) }
+        }
+        val moodleBtn = Button(this).apply {
+            text = "Moodle"
+            setOnClickListener { showOfficial(MOODLE_CAS_URL) }
+        }
+        val reloadBtn = Button(this).apply {
+            text = "刷新"
+            setOnClickListener { if (::webView.isInitialized) webView.reload() }
+        }
+        toolbar.addView(backBtn)
         toolbar.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        toolbar.addView(refresh)
-        toolbar.addView(moodle)
-        toolbar.addView(portal)
-        toolbar.addView(home)
-        root.addView(toolbar)
+        toolbar.addView(portalBtn)
+        toolbar.addView(moodleBtn)
+        toolbar.addView(reloadBtn)
+        officialPanel.addView(toolbar, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -130,47 +253,62 @@ class MainActivity : AppCompatActivity() {
             settings.javaScriptCanOpenWindowsAutomatically = false
             settings.allowFileAccess = false
             settings.allowContentAccess = false
+            cookieManager.setAcceptThirdPartyCookies(this, true)
             addJavascriptInterface(HkuPageBridge(), "MyHKU")
+            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                enqueueAuthenticatedDownload(url, userAgent, contentDisposition, mimeType)
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    val host = request.url.host?.lowercase() ?: return true
-                    return if (allowedHosts.any { host == it || host.endsWith(".$it") }) {
+                    return if (request.url.scheme == "https" && isAllowedHost(request.url.host)) {
                         false
                     } else {
-                        status.text = "已阻止非 HKU 页面"
+                        status.text = "已阻止非官方页面跳转"
                         true
                     }
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
-                    status.text = "已加载 · ${view.title ?: url}"
+                    status.text = view.title?.takeIf { it.isNotBlank() } ?: "HKU 官方认证"
                     injectReadOnlyExtractor(view)
                 }
             }
         }
-        root.addView(webView, LinearLayout.LayoutParams(
+        officialPanel.addView(webView, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             0,
-            1f
+            1f,
         ))
-        dashboard = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            // The dashboard is a bundled read-only asset.
-            settings.allowFileAccess = true
-            addJavascriptInterface(DashboardBridge(), "MyHKUDashboard")
-            addJavascriptInterface(DashboardBridge(), "myhkuAndroid")
-            webViewClient = WebViewClient()
-            visibility = android.view.View.GONE
-        }
-        root.addView(dashboard, LinearLayout.LayoutParams(
+        container.addView(officialPanel, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            0,
-            1f
+            ViewGroup.LayoutParams.MATCH_PARENT,
         ))
-        setContentView(root)
 
-        if (savedInstanceState == null || webView.restoreState(savedInstanceState) == null) webView.loadUrl(MOODLE_URL)
+        setContentView(container)
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (officialPanel.visibility == View.VISIBLE) {
+                    if (webView.canGoBack()) webView.goBack() else showDashboard()
+                    return
+                }
+                if (dashboard.canGoBack()) {
+                    dashboard.goBack()
+                    return
+                }
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+                isEnabled = true
+            }
+        })
+
+        dashboard.loadUrl(DASHBOARD_ASSET_URL)
+        if (savedInstanceState != null) {
+            webView.restoreState(savedInstanceState)
+        } else if (sitePayloads.isNotEmpty()) {
+            // Silently revalidate the previously used official session in background.
+            webView.loadUrl(MOODLE_URL)
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -180,85 +318,174 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Refresh once when the app returns to the foreground; no background polling.
         if (::webView.isInitialized && webView.url != null) webView.reload()
     }
 
-    private fun refreshHkuPages() {
-        if (dashboard.visibility == android.view.View.VISIBLE) {
-            dashboard.evaluateJavascript("window.renderSnapshot && window.renderSnapshot()", null)
-            status.text = "概览已刷新"
-            return
+    private fun injectReadOnlyExtractor(view: WebView) {
+        if (connectorSource.isNotBlank()) {
+            view.evaluateJavascript(connectorSource, null)
         }
-        status.text = "刷新中..."
-        webView.reload()
     }
 
-    private fun injectReadOnlyExtractor(view: WebView) {
-        view.evaluateJavascript(READ_ONLY_EXTRACTOR, null)
+    private fun notifyDashboardUpdated() {
+        if (!::dashboard.isInitialized) return
+        dashboard.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('myhku-native-updated')); window.renderSnapshot && window.renderSnapshot();",
+            null,
+        )
     }
 
     private fun showDashboard() {
-        webView.visibility = android.view.View.GONE
-        dashboard.visibility = android.view.View.VISIBLE
-        if (dashboard.url == null) dashboard.loadUrl("file:///android_asset/dashboard-app/index.html")
-        else dashboard.evaluateJavascript("window.renderSnapshot && window.renderSnapshot()", null)
-        status.text = "概览 · 最近一次读取结果"
+        officialPanel.visibility = View.GONE
+        dashboard.visibility = View.VISIBLE
+        if (dashboard.url == null) dashboard.loadUrl(DASHBOARD_ASSET_URL)
+        else notifyDashboardUpdated()
     }
 
     private fun showOfficial(url: String) {
-        dashboard.visibility = android.view.View.GONE
-        webView.visibility = android.view.View.VISIBLE
+        if (!isAllowedHost(Uri.parse(url).host)) return
+        officialPanel.visibility = View.VISIBLE
         webView.loadUrl(url)
+    }
+
+    private fun mergeSisPayload(previousRaw: String?, incoming: JSONObject): JSONObject {
+        if (previousRaw.isNullOrBlank() || !incoming.optBoolean("connected", false)) return incoming
+        val previous = runCatching { JSONObject(previousRaw) }.getOrNull() ?: return incoming
+        val incomingWeeks = mutableListOf<Pair<String, String>>()
+        incoming.optJSONArray("scheduleWeeks")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val w = arr.optJSONObject(i) ?: continue
+                val s = w.optString("start", ""); val e = w.optString("end", "")
+                if (s.length == 10 && e.length == 10) incomingWeeks.add(s to e)
+            }
+        }
+        incoming.optJSONObject("scheduleWeek")?.let { w ->
+            val s = w.optString("start", ""); val e = w.optString("end", "")
+            if (s.length == 10 && e.length == 10 && incomingWeeks.none { it.first == s && it.second == e }) {
+                incomingWeeks.add(s to e)
+            }
+        }
+        if (incomingWeeks.isEmpty()) return incoming
+        val mergedSchedule = JSONArray()
+        val seenIds = mutableSetOf<String>()
+        previous.optJSONArray("schedule")?.let { prevArr ->
+            for (i in 0 until prevArr.length()) {
+                val item = prevArr.optJSONObject(i) ?: continue
+                val date = item.optString("date", "").take(10)
+                val inIncoming = date.length == 10 && incomingWeeks.any { (start, end) -> date >= start && date <= end }
+                if (date.length == 10 && !inIncoming) {
+                    val id = item.optString("id", "")
+                    if (id.isEmpty() || seenIds.add(id)) mergedSchedule.put(item)
+                }
+            }
+        }
+        incoming.optJSONArray("schedule")?.let { nextArr ->
+            for (i in 0 until nextArr.length()) {
+                val item = nextArr.optJSONObject(i) ?: continue
+                val id = item.optString("id", "")
+                if (id.isEmpty() || seenIds.add(id)) mergedSchedule.put(item)
+            }
+        }
+        val weeksMap = linkedMapOf<String, JSONObject>()
+        for (source in listOf(previous.optJSONArray("scheduleWeeks"), incoming.optJSONArray("scheduleWeeks"))) {
+            source ?: continue
+            for (i in 0 until source.length()) {
+                val w = source.optJSONObject(i) ?: continue
+                val s = w.optString("start", ""); val e = w.optString("end", "")
+                if (s.length == 10 && e.length == 10) weeksMap["$s..$e"] = JSONObject().put("start", s).put("end", e)
+            }
+        }
+        incomingWeeks.forEach { (s, e) -> weeksMap.putIfAbsent("$s..$e", JSONObject().put("start", s).put("end", e)) }
+        val mergedWeeks = JSONArray()
+        weeksMap.entries.sortedBy { it.key }.forEach { mergedWeeks.put(it.value) }
+        incoming.put("schedule", mergedSchedule)
+        incoming.put("scheduleWeeks", mergedWeeks)
+        return incoming
     }
 
     private inner class HkuPageBridge {
         @android.webkit.JavascriptInterface
         fun ingest(payload: String) {
-            // Payload is normalized page data only. It is intentionally not persisted here.
-            latestPayload = runCatching { JSONObject(payload).toString() }.getOrDefault("{\"status\":\"invalid_data\"}")
-            val source = runCatching { JSONObject(latestPayload).optString("site", "") }.getOrDefault("")
-            val site = when (source) {
-                "moodle.hku.hk" -> "moodle"
-                "studentportal.hku.hk" -> "portal"
-                "hkuportal.hku.hk", "sis-main.hku.hk", "sweb.hku.hk", "intraweb.hku.hk" -> "sis"
-                else -> "latest"
+            val parsed = runCatching { JSONObject(payload) }.getOrNull() ?: return
+            val sourceHost = parsed.optString("site", "").lowercase()
+            val siteKey = parsed.optString("siteKey", "").ifBlank {
+                when (sourceHost) {
+                    "moodle.hku.hk" -> "moodle"
+                    "studentportal.hku.hk" -> "portal"
+                    "hkuportal.hku.hk", "sis-main.hku.hk", "sweb.hku.hk", "intraweb.hku.hk" -> "sis"
+                    else -> ""
+                }
             }
-            sitePayloads[site] = latestPayload
+            if (siteKey !in setOf("moodle", "portal", "sis")) return
+            val effective = if (siteKey == "sis") mergeSisPayload(sitePayloads["sis"], parsed) else parsed
+            val serialized = effective.toString()
+            sitePayloads[siteKey] = serialized
+            if (siteKey == "portal" && effective.optBoolean("connected", false) && (effective.optJSONArray("schedule")?.length() ?: 0) > 0) {
+                sitePayloads["sis"] = mergeSisPayload(sitePayloads["sis"], JSONObject(serialized).put("siteKey", "sis")).toString()
+            }
             latestPayload = combinePayloads()
             snapshotPrefs?.edit()?.apply {
-                putString(site, sitePayloads[site])
+                putString(siteKey, sitePayloads[siteKey])
+                sitePayloads["sis"]?.let { putString("sis", it) }
                 putString("latest", latestPayload)
             }?.apply()
+            CookieManager.getInstance().flush()
             runOnUiThread {
-                val size = runCatching { JSONObject(payload).toString().length }.getOrDefault(0)
-                status.text = "已读取页面数据 · ${size} 字符"
-                if (dashboard.visibility == android.view.View.VISIBLE) {
-                    dashboard.evaluateJavascript("window.renderSnapshot && window.renderSnapshot()", null)
-                }
+                val connected = effective.optBoolean("connected", false)
+                status.text = if (connected) "已同步 · ${effective.optString("detail", siteKey)}" else "请完成登录 · $siteKey"
+                notifyDashboardUpdated()
             }
         }
     }
 
     private fun combinePayloads(): String {
-        val combined = JSONObject().put("version", 3).put("connected", false)
+        val combined = JSONObject().put("version", 4).put("connected", false)
         val arrays = listOf("courses", "assignments", "announcements", "resources", "grades", "schedule")
-        arrays.forEach { combined.put(it, org.json.JSONArray()) }
+        arrays.forEach { combined.put(it, JSONArray()) }
+        val seenByField = arrays.associateWith { mutableSetOf<String>() }
+        val weeksMap = linkedMapOf<String, JSONObject>()
+        var primaryWeek: JSONObject? = null
         var latestTime = ""
         sitePayloads.values.forEach { raw ->
             runCatching {
                 val item = JSONObject(raw)
                 if (item.optBoolean("connected", false)) combined.put("connected", true)
-                val host = item.optString("site", "")
-                if (host.isNotEmpty()) combined.put("site", host)
                 val time = item.optString("fetchedAt", item.optString("capturedAt", ""))
-                if (time > latestTime) { latestTime = time; combined.put("fetchedAt", time) }
+                if (time > latestTime && item.optBoolean("connected", false)) {
+                    latestTime = time
+                    combined.put("fetchedAt", time)
+                }
+                item.optJSONObject("scheduleWeek")?.let { w ->
+                    val s = w.optString("start", ""); val e = w.optString("end", "")
+                    if (s.length == 10 && e.length == 10) {
+                        primaryWeek = JSONObject().put("start", s).put("end", e)
+                        weeksMap["$s..$e"] = JSONObject().put("start", s).put("end", e)
+                    }
+                }
+                item.optJSONArray("scheduleWeeks")?.let { ws ->
+                    for (i in 0 until ws.length()) {
+                        val w = ws.optJSONObject(i) ?: continue
+                        val s = w.optString("start", ""); val e = w.optString("end", "")
+                        if (s.length == 10 && e.length == 10) weeksMap["$s..$e"] = JSONObject().put("start", s).put("end", e)
+                    }
+                }
                 arrays.forEach { key ->
-                    val target = combined.optJSONArray(key) ?: org.json.JSONArray().also { combined.put(key, it) }
+                    val target = combined.optJSONArray(key) ?: JSONArray().also { combined.put(key, it) }
+                    val seen = seenByField.getValue(key)
                     val values = item.optJSONArray(key) ?: return@forEach
-                    for (index in 0 until values.length()) target.put(values.opt(index))
+                    for (index in 0 until values.length()) {
+                        val entry = values.optJSONObject(index) ?: continue
+                        val entryId = entry.optString("id", "")
+                        if (entryId.isEmpty() || seen.add(entryId)) target.put(entry)
+                    }
                 }
             }
+        }
+        primaryWeek?.let { combined.put("scheduleWeek", it) }
+        if (weeksMap.isNotEmpty()) {
+            val ws = JSONArray()
+            weeksMap.entries.sortedBy { it.key }.forEach { ws.put(it.value) }
+            combined.put("scheduleWeeks", ws)
         }
         return combined.toString()
     }
@@ -269,60 +496,75 @@ class MainActivity : AppCompatActivity() {
 
         @android.webkit.JavascriptInterface
         fun refreshHku(): String {
-            runOnUiThread { if (::webView.isInitialized) webView.reload() }
+            runOnUiThread {
+                if (::webView.isInitialized) {
+                    if (webView.url != null) webView.reload() else webView.loadUrl(MOODLE_URL)
+                }
+            }
             return "ok"
         }
+
+        @android.webkit.JavascriptInterface
+        fun openLogin(site: String): String {
+            val target = when (site) {
+                "portal" -> PORTAL_URL
+                "sis" -> SIS_URL
+                "moodle" -> MOODLE_CAS_URL
+                else -> PORTAL_URL
+            }
+            runOnUiThread { showOfficial(target) }
+            return getSession(site)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun downloadResource(url: String): Boolean = enqueueAuthenticatedDownload(url)
+
+        @android.webkit.JavascriptInterface
+        fun clearAccount(): Boolean {
+            sitePayloads.clear()
+            snapshotPrefs?.edit()?.clear()?.apply()
+            latestPayload = "{\"version\":4,\"connected\":false}"
+            runOnUiThread {
+                CookieManager.getInstance().removeAllCookies(null)
+                CookieManager.getInstance().flush()
+                if (::webView.isInitialized) {
+                    webView.stopLoading()
+                    webView.clearCache(true)
+                    webView.clearHistory()
+                    webView.loadUrl("about:blank")
+                }
+                showDashboard()
+            }
+            return true
+        }
+
+        @android.webkit.JavascriptInterface
+        fun getSnapshot(): String = latestPayload
 
         @android.webkit.JavascriptInterface
         fun getLatestSnapshot(): String = latestPayload
 
         @android.webkit.JavascriptInterface
         fun getSession(site: String): String = runCatching {
-            val data = JSONObject(sitePayloads[site] ?: latestPayload)
-            val host = data.optString("site", "")
-            val matches = when (site) {
-                "moodle" -> host == "moodle.hku.hk"
-                "portal" -> host == "studentportal.hku.hk"
-                "sis" -> host == "studentportal.hku.hk" || host == "hkuportal.hku.hk" || host == "sis-main.hku.hk" || host == "sweb.hku.hk" || host == "intraweb.hku.hk"
-                else -> false
-            }
+            val raw = sitePayloads[site] ?: return@runCatching JSONObject()
+                .put("connected", false)
+                .put("detail", "尚未连接官方页面")
+                .toString()
+            val data = JSONObject(raw)
+            val connected = data.optBoolean("connected", false)
             JSONObject()
-                .put("connected", matches && data.optBoolean("connected", false))
+                .put("connected", connected)
                 .put("checkedAt", data.optString("fetchedAt", data.optString("capturedAt", "")))
-                .put("detail", if (matches) "Android WebView 页面已读取" else "尚未从官方页面同步")
+                .put("detail", data.optString("detail", if (connected) "Android 官方会话已同步" else "请在官方页面登录"))
                 .toString()
         }.getOrDefault("{\"connected\":false,\"detail\":\"尚未同步\"}")
     }
 
     companion object {
-        private const val MOODLE_URL = "https://moodle.hku.hk/"
+        private const val DASHBOARD_ASSET_URL = "https://appassets.androidplatform.net/assets/dashboard-app/index.html"
+        private const val MOODLE_URL = "https://moodle.hku.hk/my/"
+        private const val MOODLE_CAS_URL = "https://moodle.hku.hk/login/index.php?authCAS=CAS"
         private const val PORTAL_URL = "https://studentportal.hku.hk/"
-
-        // Deliberately limited to visible Moodle/SIS fields and HKU links. No cookies, storage, forms, or raw HTML.
-        private const val READ_ONLY_EXTRACTOR = """
-            (() => {
-              const clean = (value, max=500) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
-              const visible = el => { const r=el.getBoundingClientRect(), s=getComputedStyle(el); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
-              const safe = value => { try { const u=new URL(value, location.href); return u.protocol==='https:' && (u.hostname==='hku.hk'||u.hostname.endsWith('.hku.hk')) ? u.toString() : ''; } catch (_) { return ''; } };
-              const text = (root, selectors=[]) => { for (const selector of selectors) { const el=root?.querySelector(selector); const value=clean(el?.textContent); if(value) return value; } return ''; };
-              const id = (prefix, value) => prefix+'-'+Array.from(clean(value)).reduce((h,c)=>(Math.imul(h^c.charCodeAt(0),16777619)>>>0).toString(16), '811c9dc5');
-              const login = Boolean(document.querySelector('input[type=password]')) || /\/(?:login|signin|sign-in|cas)(?:\/|\.|$)/i.test(location.pathname);
-              if (login) { window.MyHKU.ingest(JSON.stringify({version:3, site:location.hostname, connected:false, fetchedAt:new Date().toISOString()})); return; }
-              const host=location.hostname.toLowerCase();
-              const payload={version:3, site:host, connected:true, fetchedAt:new Date().toISOString(), courses:[], assignments:[], announcements:[], resources:[], grades:[], schedule:[]};
-              if (host==='moodle.hku.hk') {
-                const seen={courses:new Set(),assignments:new Set(),announcements:new Set(),resources:new Set(),grades:new Set()};
-                document.querySelectorAll('a[href*="/course/view.php"]').forEach(a=>{ const title=clean(a.textContent); const href=safe(a.href); if(!title) return; const key=a.href; if(seen.courses.has(key)) return; seen.courses.add(key); payload.courses.push({id:id('course',key),title,url:href}); });
-                document.querySelectorAll('a[href*="/mod/assign/"],a[href*="assign/view"]').forEach(a=>{ const root=a.closest('tr,article,li,.activity,.activity-item')||a; const title=clean(a.textContent)||text(root,['.activityname','.instancename','h3','h4']); const href=safe(a.href); if(!title||!href) return; const key=a.href; if(seen.assignments.has(key)) return; seen.assignments.add(key); const time=root.querySelector('time[datetime],time,.duedate,.due-date'); payload.assignments.push({id:id('assignment',key),title,course:text(root,['.course-name','.coursename'])||'未提供课程',...(time?{due:clean(time.getAttribute('datetime')||time.textContent,120)}:{})}); });
-                document.querySelectorAll('a[href*="/mod/resource/"],a[href*="/mod/folder/"],a[href*="/mod/url/"],a[href*="/mod/page/"]').forEach(a=>{ const title=clean(a.textContent)||clean(a.getAttribute('aria-label')); const href=safe(a.href); if(!title||!href||seen.resources.has(href)) return; seen.resources.add(href); payload.resources.push({id:id('resource',href),title,course:'未提供课程',url:href}); });
-                document.querySelectorAll('a[href*="/mod/forum/"]').forEach(a=>{ const title=clean(a.textContent), href=safe(a.href); if(!title||!href||seen.announcements.has(href)) return; seen.announcements.add(href); payload.announcements.push({id:id('announcement',href),title,course:'未提供课程',url:href}); });
-                document.querySelectorAll('table.grades tr,table.user-grade tr').forEach(row=>{ const cells=[...row.querySelectorAll('th,td')].map(c=>clean(c.textContent)).filter(Boolean); if(cells.length<2) return; const title=cells[0]; if(!/(grade|score|mark|成绩|分数)/i.test(cells.join(' '))) return; const value=cells.slice(1).find(v=>/\d+(?:\.\d+)?/.test(v))||''; payload.grades.push({id:id('grade',title),title,course:'未提供课程',...(value?{value}:{})}); });
-              } else {
-                const rootDocs=[document]; document.querySelectorAll('iframe').forEach(frame=>{try{if(frame.contentDocument) rootDocs.push(frame.contentDocument)}catch(_){}});
-                rootDocs.flatMap(root=>[...root.querySelectorAll('table')]).forEach(table=>{ const headers=[...table.querySelectorAll('thead th')].map(c=>clean(c.textContent).toLowerCase()); [...table.querySelectorAll('tbody tr,tr')].forEach(row=>{ const cells=[...row.querySelectorAll('th,td')].map(c=>clean(c.textContent)); const whole=cells.join(' · '); const times=whole.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b/gi)||[]; if(cells.length<2||times.length<2) return; const find=patterns=>{const i=headers.findIndex(h=>patterns.some(p=>p.test(h)));return i>=0?cells[i]:''}; const title=find([/course|subject|class|课程|科目/])||cells[0]; const code=find([/code|编号/]); const room=find([/room|location|venue|地点|教室/]); const teacher=find([/teacher|instructor|lecturer|教师|老师/]); payload.schedule.push({id:id('class',title+times[0]+times[1]),title, ...(code?{code}:{}),start:times[0],end:times[1],...(room?{room}:{}),...(teacher?{teacher}:{})}); }); });
-              }
-              window.MyHKU.ingest(JSON.stringify(payload));
-            })();
-        """
+        private const val SIS_URL = "https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable"
     }
 }

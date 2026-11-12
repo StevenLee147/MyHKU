@@ -9,7 +9,7 @@
 1. 在项目根目录运行 `npm run bridge`，保持桥接服务运行。
 2. 打开 Chrome 的 `chrome://extensions`，开启右上角「开发者模式」。
 3. 点击「加载已解压的扩展程序」，选择本目录下的 `extension` 文件夹。
-4. 重新加载已经登录的 `moodle.hku.hk`、`studentportal.hku.hk` 或 `hkuportal.hku.hk` 标签页。页面加载完成后会自动同步一次。
+4. 重新加载已经登录的 `moodle.hku.hk`、`studentportal.hku.hk`、`sweb.hku.hk`、`sis-main.hku.hk` 或 `hkuportal.hku.hk` 标签页。页面加载完成后会自动同步一次。
 
 扩展只在页面加载时提取数据；在 MyHKU 仪表盘中点击刷新会读取桥接内存中的最近快照。若页面内容有更新，请重新加载对应 HKU 标签页。
 

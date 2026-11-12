@@ -1,0 +1,175 @@
+{
+  "description": "Actual MyHKU UI, rendered in an isolated Chromium profile using built-in and synthetic demo data. No HKU account, credentials, or network data used.",
+  "source": "src/main.tsx",
+  "viewport": {
+    "desktop": [
+      1440,
+      940
+    ],
+    "mobile": [
+      440,
+      940
+    ]
+  },
+  "fixture": {
+    "fetchedAt": "2026-10-26T01:00:00.000Z",
+    "scheduleWeek": {
+      "start": "2026-10-26",
+      "end": "2026-11-01"
+    },
+    "schedule": [
+      {
+        "id": "s1",
+        "title": "数据科学导论",
+        "code": "COMP7901",
+        "date": "2026-10-26",
+        "start": "09:30",
+        "end": "11:20",
+        "room": "KB 419",
+        "teacher": "示例教师"
+      },
+      {
+        "id": "s2",
+        "title": "计算机系统原理",
+        "code": "COMP7801",
+        "date": "2026-10-26",
+        "start": "14:30",
+        "end": "16:20",
+        "room": "CYM LT",
+        "teacher": "示例教师"
+      },
+      {
+        "id": "s3",
+        "title": "信息与社会",
+        "code": "COMP7103",
+        "date": "2026-10-27",
+        "start": "10:30",
+        "end": "12:20",
+        "room": "MB 113",
+        "teacher": "示例教师"
+      },
+      {
+        "id": "s4",
+        "title": "数据科学导论",
+        "code": "COMP7901",
+        "date": "2026-10-28",
+        "start": "09:30",
+        "end": "11:20",
+        "room": "KB 419",
+        "teacher": "示例教师"
+      },
+      {
+        "id": "s5",
+        "title": "信息与社会",
+        "code": "COMP7103",
+        "date": "2026-10-29",
+        "start": "13:30",
+        "end": "15:20",
+        "room": "MB 113",
+        "teacher": "示例教师"
+      },
+      {
+        "id": "s6",
+        "title": "计算机系统原理",
+        "code": "COMP7801",
+        "date": "2026-10-30",
+        "start": "11:30",
+        "end": "13:20",
+        "room": "CYM LT",
+        "teacher": "示例教师"
+      }
+    ],
+    "courses": [
+      {
+        "id": "c1",
+        "title": "数据科学导论",
+        "code": "COMP7901"
+      },
+      {
+        "id": "c2",
+        "title": "计算机系统原理",
+        "code": "COMP7801"
+      },
+      {
+        "id": "c3",
+        "title": "信息与社会",
+        "code": "COMP7103"
+      }
+    ],
+    "assignments": [
+      {
+        "id": "a1",
+        "title": "Assignment 2 · 数据分析",
+        "course": "COMP7901",
+        "due": "今天 23:59",
+        "completed": false,
+        "submissionStatus": "未提交"
+      },
+      {
+        "id": "a2",
+        "title": "Reading response · Week 4",
+        "course": "COMP7801",
+        "due": "明天 18:00",
+        "completed": false,
+        "submissionStatus": "未提交"
+      },
+      {
+        "id": "a3",
+        "title": "小组项目分工确认",
+        "course": "COMP7103",
+        "due": "周五 17:00",
+        "completed": true,
+        "submissionStatus": "已提交"
+      }
+    ],
+    "resources": [
+      {
+        "id": "r1",
+        "title": "Week 04 · Lecture slides.pdf",
+        "course": "COMP7901 · 数据科学导论",
+        "url": "https://moodle.hku.hk/mod/resource/view.php?id=900001"
+      },
+      {
+        "id": "r2",
+        "title": "Assignment 2 · Brief.pdf",
+        "course": "COMP7901 · 数据科学导论",
+        "url": "https://moodle.hku.hk/mod/resource/view.php?id=900002"
+      },
+      {
+        "id": "r3",
+        "title": "Week 04 · Reading list.pdf",
+        "course": "COMP7801 · 计算机系统原理",
+        "url": "https://moodle.hku.hk/mod/resource/view.php?id=900003"
+      },
+      {
+        "id": "r4",
+        "title": "Project · Guidelines.pdf",
+        "course": "COMP7103 · 信息与社会",
+        "url": "https://moodle.hku.hk/mod/resource/view.php?id=900004"
+      }
+    ],
+    "grades": [
+      {
+        "id": "g1",
+        "title": "Assignment 1",
+        "course": "COMP7901",
+        "value": "86 / 100",
+        "released": true
+      }
+    ],
+    "announcements": [
+      {
+        "id": "n1",
+        "title": "Week 04 · Course materials are ready",
+        "course": "COMP7901",
+        "published": "10月26日"
+      },
+      {
+        "id": "n2",
+        "title": "Tutorial · Updated room information",
+        "course": "COMP7801",
+        "published": "10月25日"
+      }
+    ]
+  }
+}

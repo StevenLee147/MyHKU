@@ -35,7 +35,8 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MYHKU_APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.MYHKU_APPLE_TEAM_ID }}
       - run: npm ci
-      - run: npm run test:macos-release
+      - run: npm run check:privacy
+      - run: npm test
       - name: Verify desktop login flows
         run: npm run test:desktop-auth
       - name: Verify timetable, assignments, materials and downloads
@@ -47,6 +48,9 @@ jobs:
       - name: Verify Windows custom location and upgrade from previous release
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: ./scripts/windows-install-smoke.ps1
       - name: Package macOS (ad-hoc by default; notarized when configured)
         if: runner.os == 'macOS'
@@ -114,9 +118,14 @@ jobs:
       - name: Read Android release version
         run: node -e 'console.log("ANDROID_VERSION_CODE=" + require("./package.json").androidVersionCode)' >> "$GITHUB_ENV"
       - name: Download the actual previous release for upgrade verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           mkdir -p release
-          curl --fail --location --retry 3 --output release/android-upgrade-baseline.apk https://github.com/StevenLee147/MyHKU/releases/download/v0.2.0-alpha/app-release.apk
+          baseline_url=$(node scripts/resolve-release-baseline.mjs android)
+          echo "Using upgrade baseline: $baseline_url"
+          curl --fail --location --retry 3 --output release/android-upgrade-baseline.apk "$baseline_url"
       - run: ./gradlew :app:bundleRelease :app:assembleRelease
         working-directory: android
       - name: Verify Android release identity, signatures and alignment

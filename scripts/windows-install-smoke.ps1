@@ -5,7 +5,10 @@ $metadata = Get-Content package.json | ConvertFrom-Json
 $installer = (Resolve-Path "release/desktop/MyHKU.Setup.$($metadata.version).exe").Path
 $installDirectory = Join-Path $env:RUNNER_TEMP 'Custom Applications/MyHKU'
 $baseline = Join-Path $env:RUNNER_TEMP 'MyHKU-baseline.exe'
-Invoke-WebRequest 'https://github.com/StevenLee147/MyHKU/releases/download/v0.2.0-alpha/MyHKU.Setup.0.2.0-alpha.exe' -OutFile $baseline
+$baselineUrl = (& node scripts/resolve-release-baseline.mjs windows)
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($baselineUrl)) { throw 'Could not resolve baseline Windows installer URL.' }
+Write-Output "Using Windows upgrade baseline: $baselineUrl"
+Invoke-WebRequest $baselineUrl -OutFile $baseline
 
 function Install-MyHKU($file, $arguments) {
     $process = Start-Process -FilePath $file -ArgumentList $arguments -PassThru -Wait -WindowStyle Hidden

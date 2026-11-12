@@ -72,6 +72,34 @@
     return index < 0 ? null : row.cells[index]
   }
   const submissionStatus = root => clean(tableField(root, /submission status|提交狀態|提交状态/i)?.textContent || root.querySelector('.submissionstatus, [data-region="submission-status"]')?.textContent, 160)
+  const parseGradeValue = rawText => {
+    const raw = clean(rawText, 80)
+    if (!raw) return null
+    if (/^(?:[-–—]+|empty|not\s*graded|ungraded|n\/a|pending|未评分|未評分|未发布|未發布|暂无)$/i.test(raw)) {
+      return { released: false }
+    }
+    if (/^(?:\d+(?:\.\d+)?(?:\s*(?:%|\/\s*\d+(?:\.\d+)?))?|[A-DF][+-]?|pass|fail|distinction|merit|credit|合格|及格|不及格)$/i.test(raw)) {
+      return { value: raw, released: true }
+    }
+    const embedded = raw.match(/\b\d+(?:\.\d+)?(?:\s*(?:%|\/\s*\d+(?:\.\d+)?))?\b/)
+    return embedded ? { value: embedded[0].slice(0, 80), released: true } : null
+  }
+  const extractGradeFromRow = root => {
+    const explicitCell = tableField(root, /^(?:grade|mark|score|成绩|成績|分数|分數|得分)$/i) ||
+      tableField(root, /(?:grade|mark|score|成绩|成績|分数|分數)/i)
+    if (explicitCell) return parseGradeValue(explicitCell.textContent)
+    const row = root.closest('tr')
+    const table = row?.closest('table')
+    const headers = table ? Array.from(table.querySelectorAll('thead tr:last-child th, thead tr:last-child td')).map(c => clean(c.textContent).toLowerCase()) : []
+    const cells = Array.from(root.querySelectorAll('th,td')).map(cell => clean(cell.textContent))
+    for (let idx = 1; idx < cells.length; idx += 1) {
+      const head = headers[idx] || ''
+      if (/weight|range|contribution|rank|feedback|权重|權重|范围|範圍|评语/i.test(head)) continue
+      const parsed = parseGradeValue(cells[idx])
+      if (parsed) return parsed
+    }
+    return null
+  }
   const parseDue = (root) => {
     const node = root.querySelector('time[datetime], [data-due-date], .duedate, .due-date, .event-time, time')
     const raw = clean(node ? (node.getAttribute('datetime') || node.getAttribute('data-due-date') || node.textContent) : tableField(root, /due date|截止|到期/i)?.textContent, 120)
@@ -147,13 +175,24 @@
 
     const grades = []; const gradeIds = new Set()
     document.querySelectorAll('a[href*="/grade/"], a[href*="grade/report"], table.grades tr, table.user-grade tr').forEach((node) => {
-      const root = node.matches('tr') ? node : nearest(node); const cells = Array.from(root.querySelectorAll('th,td')).map((cell) => clean(cell.textContent)).filter(Boolean)
-      const title = clean(node.textContent).slice(0, 180) || cells[0]
-      if (!title || !/(grade|score|mark|成绩|分数)/i.test(clean(root.textContent))) return
+      const root = node.matches('tr') ? node : nearest(node)
+      const cells = Array.from(root.querySelectorAll('th,td')).map((cell) => clean(cell.textContent)).filter(Boolean)
+      if (root.matches('tr') && root.querySelector('th') && !root.querySelector('td')) return
+      const title = clean(node.matches('tr') ? cells[0] : node.textContent).slice(0, 180) || cells[0]
+      if (!title || /^(?:grade\s*item|item\s*name|course\s*total|name|项目|名称)$/i.test(title)) return
+      if (!root.closest('table.grades, table.user-grade') && !/(grade|score|mark|成绩|成績|分数)/i.test(clean(root.textContent))) return
+      const parsed = extractGradeFromRow(root)
+      if (!parsed && node.matches('a')) return
       const id = idFrom(root, linkHref(node.matches('a') ? node : root.querySelector('a')), 'grade', title)
       if (gradeIds.has(id)) return
-      gradeIds.add(id); const value = (cells.slice(1).find((value) => /\d+(?:\.\d+)?\s*(?:%|\/\s*\d+)?/.test(value)) || '').slice(0, 80)
-      grades.push({ id, title, course: text(root, ['.course-name', '.coursename']) || '未提供课程', ...(value ? { value } : {}), released: true })
+      gradeIds.add(id)
+      grades.push({
+        id,
+        title,
+        course: text(root, ['.course-name', '.coursename']) || '未提供课程',
+        ...(parsed?.value ? { value: parsed.value } : {}),
+        released: parsed ? parsed.released : false,
+      })
     })
     return { courses, assignments, announcements, resources, grades }
   }
@@ -167,6 +206,17 @@
     } catch (_) { return '' }
   }
 
+  async function runBounded(items, limit, worker) {
+    const queue = items.slice()
+    const runners = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+      while (queue.length) {
+        const next = queue.shift()
+        if (next !== undefined) await worker(next)
+      }
+    })
+    await Promise.all(runners)
+  }
+
   // Moodle's dashboard exposes course links, while resources and forum posts
   // live one level deeper. Read those rendered course pages through the
   // authenticated WebView session and return only normalized visible fields.
@@ -178,12 +228,25 @@
       links.push(`${current.origin}/course/view.php?id=${encodeURIComponent(current.searchParams.get('id'))}`)
     }
     const unique = Array.from(new Set(links)).slice(0, 20)
+    const cacheKey = unique.join('|')
+    const cached = globalThis.__myhkuMoodleCrawlCache
+    if (!globalThis.__myhkuForceCrawl && cached && cached.key === cacheKey && Date.now() - cached.at < 60_000) {
+      return {
+        courses: baseData.courses,
+        assignments: Array.from(new Map([...baseData.assignments, ...cached.extra.assignments].map(item => [item.id, item])).values()),
+        announcements: Array.from(new Map([...baseData.announcements, ...cached.extra.announcements].map(item => [item.id, item])).values()),
+        resources: Array.from(new Map([...baseData.resources, ...cached.extra.resources].map(item => [item.id, item])).values()),
+        grades: Array.from(new Map([...baseData.grades, ...cached.extra.grades].map(item => [item.id, item])).values()),
+        completeCrawl: cached.completeCrawl,
+      }
+    }
     const extra = { assignments: [], announcements: [], resources: [], grades: [] }
     const seen = { assignments: new Set(), announcements: new Set(), resources: new Set(), grades: new Set() }
-    await Promise.all(unique.map(async (courseUrl) => {
+    let failedCourses = 0
+    await runBounded(unique, 4, async (courseUrl) => {
       try {
         const response = await fetch(courseUrl, { credentials: 'include' })
-        if (!response.ok) return
+        if (!response.ok) { failedCourses += 1; return }
         const html = await response.text()
         const doc = new DOMParser().parseFromString(html, 'text/html')
         const heading = clean(doc.querySelector('h1, .page-header-headings, [data-region="header"]')?.textContent) || '未提供课程'
@@ -210,41 +273,60 @@
           seen.announcements.add(id); const timeNode = root.querySelector('time[datetime], time, .date, .discussion-date'); const published = clean(timeNode && (timeNode.getAttribute('datetime') || timeNode.textContent))
           extra.announcements.push({ id, title, course: heading, ...(published ? { published } : {}), url: href })
         })
-        doc.querySelectorAll('a[href*="/grade/"], a[href*="grade/report"], table.grades tr, table.user-grade tr').forEach(node => {
-          const root = node.matches('tr') ? node : nearest(node); const cells = Array.from(root.querySelectorAll('th,td')).map(cell => clean(cell.textContent)).filter(Boolean); const title = clean(node.textContent).slice(0, 180) || cells[0]
-          if (!title || !/grade|score|mark|成绩|分数/i.test(clean(root.textContent))) return
-          const href = pageHref(node.matches('a') ? node : root.querySelector('a'), courseUrl); const id = idFrom(root, href, 'grade', `${heading}|${title}`)
+        doc.querySelectorAll('table.grades tr, table.user-grade tr').forEach(node => {
+          const root = node.matches('tr') ? node : nearest(node)
+          if (root.querySelector('th') && !root.querySelector('td')) return
+          const cells = Array.from(root.querySelectorAll('th,td')).map(cell => clean(cell.textContent)).filter(Boolean)
+          const title = cells[0]
+          if (!title || /^(?:grade\s*item|item\s*name|name|项目|名称)$/i.test(title)) return
+          const parsed = extractGradeFromRow(root)
+          if (!parsed) return
+          const href = pageHref(root.querySelector('a'), courseUrl)
+          const id = idFrom(root, href, 'grade', `${heading}|${title}`)
           if (seen.grades.has(id)) return
-          seen.grades.add(id); const value = (cells.slice(1).find(value => /\d+(?:\.\d+)?\s*(?:%|\/\s*\d+)?/.test(value)) || '').slice(0, 80)
-          extra.grades.push({ id, title, course: heading, ...(value ? { value } : {}), released: true })
+          seen.grades.add(id)
+          extra.grades.push({ id, title, course: heading, ...(parsed.value ? { value: parsed.value } : {}), released: parsed.released })
         })
-        // Moodle 5 puts due dates and submission states in the course overview,
+        // Moodle 5 puts due dates, submission states and grades in the course overview,
         // not in the course's activity cards. Match rows by the activity URL id.
         const courseId = new URL(courseUrl).searchParams.get('id')
         const overviewUrl = new URL(`/course/overview.php?id=${encodeURIComponent(courseId)}`, courseUrl).href
-        const overviewResponse = await fetch(overviewUrl, { credentials: 'include' })
-        if (overviewResponse.ok) {
-          const overview = new DOMParser().parseFromString(await overviewResponse.text(), 'text/html')
-          overview.querySelectorAll('a[href*="/mod/assign/view.php"]').forEach(link => {
-            const root = nearest(link); const href = pageHref(link, overviewUrl)
-            const title = clean(link.textContent)
-            if (!href || !title) return
-            const id = idFrom(root, href, 'assignment', title)
-            const due = parseDue(root); const status = submissionStatus(root); const done = completed(root)
-            const item = { id, title, course: heading, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) }
-            const index = extra.assignments.findIndex(item => item.id === id)
-            if (index < 0) extra.assignments.push(item)
-            else extra.assignments[index] = item
-          })
-        }
-      } catch (_) { /* one unavailable course must not hide the others */ }
-    }))
+        try {
+          const overviewResponse = await fetch(overviewUrl, { credentials: 'include' })
+          if (overviewResponse.ok) {
+            const overview = new DOMParser().parseFromString(await overviewResponse.text(), 'text/html')
+            overview.querySelectorAll('a[href*="/mod/assign/view.php"]').forEach(link => {
+              const root = nearest(link); const href = pageHref(link, overviewUrl)
+              const title = clean(link.textContent)
+              if (!href || !title) return
+              const id = idFrom(root, href, 'assignment', title)
+              const due = parseDue(root); const status = submissionStatus(root); const done = completed(root)
+              const item = { id, title, course: heading, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) }
+              const index = extra.assignments.findIndex(existing => existing.id === id)
+              if (index < 0) extra.assignments.push(item)
+              else extra.assignments[index] = item
+              const parsedGrade = extractGradeFromRow(root)
+              if (parsedGrade) {
+                const gradeId = `grade-${id}`
+                const gradeItem = { id: gradeId, title, course: heading, ...(parsedGrade.value ? { value: parsedGrade.value } : {}), released: parsedGrade.released }
+                const gradeIdx = extra.grades.findIndex(existing => existing.id === gradeId)
+                if (gradeIdx < 0) { seen.grades.add(gradeId); extra.grades.push(gradeItem) }
+                else extra.grades[gradeIdx] = gradeItem
+              }
+            })
+          }
+        } catch (_) { /* optional overview endpoint */ }
+      } catch (_) { failedCourses += 1 }
+    })
+    const completeCrawl = unique.length > 0 && failedCourses === 0
+    globalThis.__myhkuMoodleCrawlCache = { key: cacheKey, at: Date.now(), extra, completeCrawl }
     return {
       courses: baseData.courses,
       assignments: Array.from(new Map([...baseData.assignments, ...extra.assignments].map(item => [item.id, item])).values()),
-      announcements: [...baseData.announcements, ...extra.announcements],
+      announcements: Array.from(new Map([...baseData.announcements, ...extra.announcements].map(item => [item.id, item])).values()),
       resources: Array.from(new Map([...baseData.resources, ...extra.resources].map(item => [item.id, item])).values()),
-      grades: [...baseData.grades, ...extra.grades],
+      grades: Array.from(new Map([...baseData.grades, ...extra.grades].map(item => [item.id, item])).values()),
+      completeCrawl,
     }
   }
 
@@ -253,12 +335,22 @@
     return { start: (matches[0] || '').replace('：', ':'), end: (matches[1] || '').replace('：', ':') }
   }
 
-  function extractWeekRange(rootDocument = document) {
+  function extractWeekRange(rootDocument = document, seen = new Set()) {
+    if (!rootDocument || seen.has(rootDocument)) return undefined
+    seen.add(rootDocument)
     const raw = String(rootDocument.body?.textContent || rootDocument.documentElement?.textContent || '')
     const match = raw.match(/Week\s+of\s+(\d{1,2})\/(\d{1,2})\/(\d{4})\s*[-–]\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/i)
-    if (!match) return undefined
-    const iso = (day, month, year) => `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    return { start: iso(Number(match[1]), Number(match[2]), Number(match[3])), end: iso(Number(match[4]), Number(match[5]), Number(match[6])) }
+    if (match) {
+      const iso = (day, month, year) => `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+      return { start: iso(Number(match[1]), Number(match[2]), Number(match[3])), end: iso(Number(match[4]), Number(match[5]), Number(match[6])) }
+    }
+    for (const frame of Array.from(rootDocument.querySelectorAll?.('iframe, frame') || [])) {
+      try {
+        const nested = extractWeekRange(frame.contentDocument, seen)
+        if (nested) return nested
+      } catch (_) { /* cross-origin frame */ }
+    }
+    return undefined
   }
 
   function extractSis(rootDocument = document, seenDocuments = new Set()) {
@@ -396,38 +488,112 @@
     return merged
   }
 
-  // PeopleSoft renders one week at a time and exposes the other weeks through
-  // ordinary next/previous anchors. Fetch those rendered pages with the same
-  // authenticated session so the app receives the complete timetable.
-  async function crawlSisSchedule(baseSchedule) {
-    const merged = [...baseSchedule]
+  function findNextWeekRequests(doc, baseUrl) {
+    const results = []
+    const collect = (root, seen = new Set()) => {
+      if (!root || seen.has(root)) return
+      seen.add(root)
+      for (const link of Array.from(root.querySelectorAll?.('a[href]') || [])) {
+        const label = `${clean(link.textContent)} ${clean(link.getAttribute('title'))} ${clean(link.getAttribute('aria-label'))}`
+        if (!/(?:next\s*week|下一?周|下週|next\s*7|forward)/i.test(label)) continue
+        const href = pageHref(link, baseUrl)
+        if (href) results.push({ url: href, method: 'GET' })
+      }
+      for (const btn of Array.from(root.querySelectorAll?.('button[onclick], input[onclick]') || [])) {
+        const label = `${clean(btn.textContent)} ${clean(btn.getAttribute('value'))} ${clean(btn.getAttribute('title'))} ${clean(btn.getAttribute('aria-label'))}`
+        if (!/(?:next\s*week|下一?周|下週)/i.test(label)) continue
+        const onclick = btn.getAttribute('onclick') || ''
+        const urlMatch = onclick.match(/(?:location(?:\.href)?\s*=\s*|window\.open\(\s*)['"]([^'"]+)['"]/i)
+        if (urlMatch) {
+          try {
+            const parsed = new URL(urlMatch[1], baseUrl)
+            if (parsed.protocol === 'https:' && (parsed.hostname === 'hku.hk' || parsed.hostname.endsWith('.hku.hk'))) {
+              results.push({ url: parsed.toString(), method: 'GET' })
+            }
+          } catch (_) { /* ignore non-URL script */ }
+        }
+      }
+      for (const form of Array.from(root.querySelectorAll?.('form[action]') || [])) {
+        const method = String(form.getAttribute('method') || 'GET').toUpperCase()
+        if (method !== 'GET') continue
+        const submitter = Array.from(form.querySelectorAll('button, input[type="submit"], input[type="button"]'))
+          .find(node => /(?:next\s*week|下一?周|下週)/i.test(`${clean(node.textContent)} ${clean(node.getAttribute('value'))} ${clean(node.getAttribute('aria-label'))}`))
+        if (!submitter) continue
+        const actionHref = pageHref(form, baseUrl)
+        if (!actionHref) continue
+        try {
+          const target = new URL(actionHref)
+          for (const input of Array.from(form.querySelectorAll('input[name], select[name]'))) {
+            const type = String(input.getAttribute('type') || '').toLowerCase()
+            if ((type === 'submit' || type === 'button') && input !== submitter) continue
+            if ((type === 'checkbox' || type === 'radio') && !input.checked) continue
+            const name = input.getAttribute('name')
+            if (name) target.searchParams.set(name, input.value || input.getAttribute('value') || '')
+          }
+          results.push({ url: target.toString(), method: 'GET' })
+        } catch (_) { /* ignore malformed form */ }
+      }
+      for (const frame of Array.from(root.querySelectorAll?.('iframe, frame') || [])) {
+        try { collect(frame.contentDocument, seen) } catch (_) { /* cross-origin frame */ }
+      }
+    }
+    collect(doc)
+    return results
+  }
+
+  // Prefetch the current week plus up to 4 upcoming weeks when SIS/MyWeekly
+  // exposes stateless GET next-week links, so multi-week browsing works offline
+  // without overwriting other weeks in the bridge.
+  async function prefetchSisWeeks() {
+    const merged = extractSis(document)
+    const initialWeek = extractWeekRange(document)
+    const weeksMap = new Map()
+    if (initialWeek) weeksMap.set(`${initialWeek.start}..${initialWeek.end}`, initialWeek)
     const seenUrls = new Set([location.href])
-    const queue = [{ url: location.href, method: 'GET' }]
-    while (queue.length && seenUrls.size <= 16) {
-      const current = queue.shift()
-      const url = current?.url
-      if (!url) continue
+    let frontier = findNextWeekRequests(document, location.href)
+    const MAX_FUTURE_WEEKS = 4
+    let step = 0
+    while (frontier.length && step < MAX_FUTURE_WEEKS) {
+      const nextReq = frontier.find(item => item.url && !seenUrls.has(item.url))
+      if (!nextReq) break
+      seenUrls.add(nextReq.url)
+      step += 1
       try {
-        const response = await fetch(url, { credentials: 'include', method: current.method || 'GET' })
-        if (!response.ok) continue
+        const response = await fetch(nextReq.url, { credentials: 'include', method: nextReq.method || 'GET' })
+        if (!response.ok) break
         const html = await response.text()
         const doc = new DOMParser().parseFromString(html, 'text/html')
-        for (const item of extractSis(doc)) if (!merged.some(existing => existing.id === item.id)) merged.push(item)
-        for (const link of Array.from(doc.querySelectorAll('a[href]'))) {
-          const label = clean(link.textContent).toLowerCase()
-          const title = clean(link.getAttribute('title')).toLowerCase()
-          const aria = clean(link.getAttribute('aria-label')).toLowerCase()
-          if (!/(next|previous|prev|下一|上一|下页|上页|week|周)/i.test(`${label} ${title} ${aria}`)) continue
-          const href = pageHref(link, url)
-          if (href && !seenUrls.has(href)) { seenUrls.add(href); queue.push({ url: href, method: 'GET' }) }
+        if (doc.querySelector('input[type="password"]')) break
+        const week = extractWeekRange(doc)
+        if (week) weeksMap.set(`${week.start}..${week.end}`, week)
+        for (const item of extractSis(doc)) {
+          if (!merged.some(existing => existing.id === item.id)) merged.push(item)
         }
-        for (const form of Array.from(doc.querySelectorAll('form[action*="week="]'))) {
-          const href = pageHref(form, url)
-          if (href && !seenUrls.has(href)) { seenUrls.add(href); queue.push({ url: href, method: String(form.method || 'GET').toUpperCase() }) }
-        }
-      } catch (_) { /* one unavailable page must not hide the remaining weeks */ }
+        frontier = findNextWeekRequests(doc, nextReq.url)
+      } catch (_) {
+        break
+      }
     }
-    return merged
+    const scheduleWeeks = Array.from(weeksMap.values()).sort((a, b) => a.start.localeCompare(b.start))
+    return {
+      schedule: merged,
+      ...(initialWeek ? { scheduleWeek: initialWeek } : scheduleWeeks[0] ? { scheduleWeek: scheduleWeeks[0] } : {}),
+      ...(scheduleWeeks.length ? { scheduleWeeks } : {}),
+    }
+  }
+
+  function deliverAndroid(payload) {
+    try {
+      if (globalThis.MyHKU && typeof globalThis.MyHKU.ingest === 'function') {
+        globalThis.MyHKU.ingest(JSON.stringify({
+          version: 4,
+          site: host,
+          siteKey: site,
+          fetchedAt: new Date().toISOString(),
+          ...payload,
+        }))
+      }
+    } catch (_) { /* optional Android WebView interface */ }
   }
 
   async function publish() {
@@ -436,25 +602,40 @@
       /\/(?:login|signin|sign-in|cas)(?:\/|\.|$)/i.test(location.pathname) ||
       /login|sign in|登入|登录/i.test(document.title)
     if (loginPage) {
-      try {
-        await fetch(BRIDGE + site, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ connected: false, detail: clean(document.title, 240) || location.pathname }), keepalive: true })
-      } catch (_) { /* bridge may be stopped; the next page load retries */ }
-      return
+      const disconnectedPayload = { connected: false, detail: clean(document.title, 240) || location.pathname }
+      deliverAndroid(disconnectedPayload)
+      if (!globalThis.__MYHKU_SKIP_POST__) {
+        try {
+          await fetch(BRIDGE + site, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(disconnectedPayload), keepalive: true })
+        } catch (_) { /* bridge may be stopped; the next page load retries */ }
+      }
+      return disconnectedPayload
     }
     const data = site === 'moodle'
       ? await crawlMoodleCoursePages(extractMoodle())
       : site === 'sis'
-        ? { schedule: extractSis() }
+        ? await prefetchSisWeeks()
         : { schedule: await crawlPortalSchedule(extractSis()) }
-    if (site === 'sis') data.scheduleWeek = extractWeekRange()
-    const fields = Object.fromEntries(Object.entries(data).filter(([key, value]) => Array.isArray(value) || (key === 'scheduleWeek' && value && typeof value === 'object')))
-    if (site === 'sis' && Array.isArray(fields.schedule) && (fields.schedule.length > 0 || fields.scheduleWeek)) fields.replaceFields = ['schedule']
+    const fields = Object.fromEntries(Object.entries(data).filter(([key, value]) =>
+      (key !== 'completeCrawl' && Array.isArray(value)) ||
+      (key === 'scheduleWeek' && value && typeof value === 'object')))
+    if (site === 'sis' && Array.isArray(fields.schedule) && (fields.schedule.length > 0 || fields.scheduleWeek || (Array.isArray(fields.scheduleWeeks) && fields.scheduleWeeks.length > 0))) {
+      fields.replaceFields = ['schedule']
+    } else if (site === 'moodle' && /^\/my(?:\/|$)/i.test(location.pathname) && Array.isArray(fields.courses) && fields.courses.length > 0) {
+      fields.replaceFields = data.completeCrawl
+        ? ['courses', 'assignments', 'resources', 'announcements', 'grades']
+        : ['courses']
+    }
     // Include a page marker so the bridge can report the current session even
     // when a valid page contains no rows (for example an empty course list).
     fields.detail = clean(document.title, 240) || location.pathname
-    try {
-      await fetch(BRIDGE + site, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(fields), keepalive: true })
-    } catch (_) { /* bridge may be stopped; the next page load retries */ }
+    deliverAndroid({ connected: true, ...fields })
+    if (!globalThis.__MYHKU_SKIP_POST__) {
+      try {
+        await fetch(BRIDGE + site, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(fields), keepalive: true })
+      } catch (_) { /* bridge may be stopped; the next page load retries */ }
+    }
+    return { connected: true, ...fields }
   }
 
   return publish()
