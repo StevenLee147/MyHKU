@@ -122,8 +122,55 @@ test('bridge merges schedule by week range without wiping other weeks and wipes 
   }
 })
 
+test('bridge drops legacy pre-v2 shifted schedule cache while preserving cached Moodle courses', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'myhku-bridge-legacy-'))
+  const cacheFile = path.join(tmpDir, 'cache.enc.json')
+  const key = crypto.randomBytes(32)
+  const iv = crypto.randomBytes(12)
+  const legacyPayload = JSON.stringify({
+    fetchedAt: '2026-11-12T08:00:00Z',
+    scheduleWeek: { start: '2026-11-15', end: '2026-11-21' },
+    scheduleWeeks: [{ start: '2026-11-15', end: '2026-11-21' }],
+    schedule: [{ id: 'shifted', title: 'CAES1001-1C3', date: '2026-11-15', day: 'SUN', start: '09:00', end: '11:50' }],
+    courses: [{ id: '146039', title: 'GLIS1901', code: 'GLIS1901' }],
+    assignments: [], resources: [], grades: [], announcements: [],
+  })
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+  const encrypted = Buffer.concat([cipher.update(legacyPayload, 'utf8'), cipher.final()])
+  fs.writeFileSync(cacheFile, JSON.stringify({
+    version: 1,
+    iv: iv.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'),
+    data: encrypted.toString('base64'),
+  }))
+  const child = spawn(process.execPath, [path.join(root, 'bridge', 'server.mjs')], {
+    cwd: root,
+    env: { ...process.env, MYHKU_BRIDGE_PORT: '0', MYHKU_BRIDGE_CACHE_FILE: cacheFile, MYHKU_BRIDGE_CACHE_KEY: key.toString('base64') },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  try {
+    const port = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Bridge startup timed out')), 5000)
+      child.stdout.on('data', chunk => {
+        const match = String(chunk).match(/127\.0\.0\.1:(\d+)/)
+        if (match) { clearTimeout(timer); resolve(Number(match[1])) }
+      })
+    })
+    const snap = await (await fetch(`http://127.0.0.1:${port}/api/snapshot`)).json()
+    assert.equal(snap.schedule.length, 0, 'legacy shifted schedule must be cleared')
+    assert.equal(snap.scheduleWeeks.length, 0, 'legacy scheduleWeeks must be cleared')
+    assert.equal(snap.courses.length, 1, 'cached Moodle courses remain intact')
+  } finally {
+    child.kill()
+    await new Promise(resolve => child.once('exit', resolve))
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
+})
+
 test('schedule layout splits overlapping classes into side-by-side columns and preserves todayClasses across multi-week snapshots', async () => {
-  const { layoutDayEvents, todayClasses, hongKongGreeting, currentHongKongWeekStart, baseWeekStartDate, formatIsoLocalDate } = await loadTsModule('src/services/schedule.ts')
+  const { layoutDayEvents, todayClasses, hongKongGreeting, currentHongKongWeekStart, baseWeekStartDate, formatIsoLocalDate, calendarDaysBetween } = await loadTsModule('src/services/schedule.ts')
+  assert.equal(calendarDaysBetween('2026-11-15', '2026-11-16'), 1)
+  assert.equal(calendarDaysBetween('2026-11-15', '2026-11-21'), 6)
 
   const placed = layoutDayEvents([
     { item: { id: 'a', title: 'Lecture', start: '13:30', end: '15:20' }, start: 810, end: 920 },

@@ -32,5 +32,6 @@ interface Window {
     openLogin?: (site: string) => string
     downloadResource?: (url: string) => boolean
     clearAccount?: () => boolean
+    setThemeAppearance?: (isDark: boolean) => void
   }
 }

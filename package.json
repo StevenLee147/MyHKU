@@ -1,7 +1,7 @@
 {
   "name": "myhku-dashboard",
   "private": true,
-  "version": "0.2.3-alpha",
+  "version": "0.2.4-alpha",
   "description": "HKU Portal, SIS and Moodle learning dashboard",
   "author": "MyHKU",
   "main": "desktop/main.mjs",
@@ -125,5 +125,5 @@
       }
     }
   },
-  "androidVersionCode": 8
+  "androidVersionCode": 9
 }

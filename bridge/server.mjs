@@ -93,8 +93,11 @@ function decodeCacheKey(value) {
   } catch { return null }
 }
 
+const SCHEDULE_CACHE_SCHEMA = 2
+
 function cachePayload() {
   return JSON.stringify({
+    scheduleSchema: SCHEDULE_CACHE_SCHEMA,
     fetchedAt: snapshot.fetchedAt,
     scheduleWeek: snapshot.scheduleWeek,
     scheduleWeeks: snapshot.scheduleWeeks,
@@ -110,12 +113,19 @@ function loadEncryptedCache() {
     decipher.setAuthTag(Buffer.from(record.tag, 'base64'))
     const data = JSON.parse(Buffer.concat([decipher.update(Buffer.from(record.data, 'base64')), decipher.final()]).toString('utf8'))
     if (!data || typeof data !== 'object') return
-    for (const field of ARRAY_FIELDS) if (Array.isArray(data[field])) snapshot[field] = data[field]
-    const week = normalizeWeekRange(data.scheduleWeek)
-    if (week) snapshot.scheduleWeek = week
-    if (Array.isArray(data.scheduleWeeks)) snapshot.scheduleWeeks = mergeWeekRanges([], data.scheduleWeeks)
-    else if (week) snapshot.scheduleWeeks = [week]
-    snapshot.fetchedAt = typeof data.fetchedAt === 'string' ? data.fetchedAt : null
+    const validSchedule = data.scheduleSchema === SCHEDULE_CACHE_SCHEMA
+    for (const field of ARRAY_FIELDS) {
+      if (field === 'schedule' && !validSchedule) continue
+      if (Array.isArray(data[field])) snapshot[field] = data[field]
+    }
+    if (validSchedule) {
+      const week = normalizeWeekRange(data.scheduleWeek)
+      if (week) snapshot.scheduleWeek = week
+      if (Array.isArray(data.scheduleWeeks)) snapshot.scheduleWeeks = mergeWeekRanges([], data.scheduleWeeks)
+      else if (week) snapshot.scheduleWeeks = [week]
+    }
+    const hasAnyData = ARRAY_FIELDS.some(field => snapshot[field].length > 0) || snapshot.scheduleWeeks.length > 0
+    snapshot.fetchedAt = hasAnyData && typeof data.fetchedAt === 'string' ? data.fetchedAt : null
   } catch { /* absent or invalid cache is treated as empty */ }
 }
 

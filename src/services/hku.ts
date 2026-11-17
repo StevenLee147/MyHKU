@@ -103,6 +103,8 @@ export function applyThemeMode(theme: ThemeMode) {
     root.dataset.theme = theme
     root.style.colorScheme = theme === 'dark' ? 'only dark' : 'only light'
   }
+  const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia?.('(prefers-color-scheme: dark)').matches === true)
+  try { window.myhkuAndroid?.setThemeAppearance?.(isDark) } catch { /* ignore */ }
 }
 
 export function setThemeMode(theme: ThemeMode) {
@@ -267,18 +269,32 @@ export async function fetchLiveSnapshot(signal?: AbortSignal): Promise<LiveSnaps
  * Local renderer cache for the last normalized snapshot.
  * Contains no cookies, passwords, or access tokens.
  */
+const SNAPSHOT_SCHEDULE_SCHEMA = 2
+
 export function getCachedSnapshot(): LiveSnapshot | null {
   try {
-    const parsed = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null') as Partial<LiveSnapshot> | null
+    const parsed = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null') as (Partial<LiveSnapshot> & { scheduleSchema?: number }) | null
     if (!parsed || typeof parsed.fetchedAt !== 'string') return null
-    return normalizeSnapshotPayload(parsed)
+    const validSchedule = parsed.scheduleSchema === SNAPSHOT_SCHEDULE_SCHEMA
+    const normalized = normalizeSnapshotPayload(
+      validSchedule ? parsed : { ...parsed, schedule: [], scheduleWeek: undefined, scheduleWeeks: undefined },
+    )
+    const hasAnyData =
+      normalized.schedule.length > 0 ||
+      Boolean(normalized.scheduleWeeks?.length) ||
+      normalized.courses.length > 0 ||
+      normalized.assignments.length > 0 ||
+      normalized.resources.length > 0 ||
+      normalized.grades.length > 0 ||
+      normalized.announcements.length > 0
+    return hasAnyData ? normalized : null
   } catch {
     return null
   }
 }
 
 export function cacheSnapshot(snapshot: LiveSnapshot) {
-  try { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot)) } catch { /* ignore */ }
+  try { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ ...snapshot, scheduleSchema: SNAPSHOT_SCHEDULE_SCHEMA })) } catch { /* ignore */ }
 }
 
 /** Notify only on changes and upcoming deadlines after the first successful baseline sync. */

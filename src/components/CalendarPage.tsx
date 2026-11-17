@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import type { DataMode, LiveSnapshot } from '../services/hku'
 import {
   baseWeekStartDate,
+  calendarDaysBetween,
   currentHongKongWeekStart,
   formatIsoLocalDate,
   hongKongDate,
@@ -25,8 +26,8 @@ function formatWeekRangeLabel(start: Date, end: Date): string {
 
 function scheduleDayIndex(item: LiveSnapshot['schedule'][number], weekStart: Date): number {
   if (item.date) {
-    const parsed = new Date(`${item.date.slice(0, 10)}T00:00:00`)
-    if (!Number.isNaN(parsed.getTime())) return Math.round((parsed.getTime() - weekStart.getTime()) / 86_400_000)
+    const diff = calendarDaysBetween(formatIsoLocalDate(weekStart), item.date.slice(0, 10))
+    if (diff !== null) return diff
   }
   const raw = (item.day || '').toLowerCase()
   const names = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']

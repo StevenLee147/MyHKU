@@ -1,5 +1,9 @@
 :root {
   color-scheme: light dark;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
   --font-sans: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --bg-app: #f4f7fb;
   --bg-surface: #ffffff;
@@ -123,10 +127,16 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-padding-top: calc(70px + var(--safe-top));
+  scroll-padding-bottom: calc(24px + var(--safe-bottom));
+}
+
 body {
   margin: 0;
   background: var(--bg-app);
   color: var(--text-primary);
+  overflow-wrap: break-word;
 }
 
 button:focus-visible,
@@ -139,6 +149,7 @@ input:focus-visible,
 
 .app-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
 }
 
@@ -149,10 +160,11 @@ input:focus-visible,
   color: #cad6e3;
   display: flex;
   flex-direction: column;
-  padding: 24px 15px 18px;
+  padding: calc(24px + var(--safe-top)) 15px calc(18px + var(--safe-bottom)) calc(15px + var(--safe-left));
   position: relative;
   z-index: 10;
   flex-shrink: 0;
+  overflow-y: auto;
 }
 
 .brand {
@@ -344,13 +356,13 @@ nav button.active svg {
 }
 
 .topbar {
-  height: 70px;
+  min-height: calc(70px + var(--safe-top));
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 36px;
+  padding: var(--safe-top) calc(36px + var(--safe-right)) 0 calc(36px + var(--safe-left));
   gap: 20px;
   position: sticky;
   top: 0;
@@ -1157,8 +1169,8 @@ nav button.active svg {
 
 .toast {
   position: fixed;
-  top: 80px;
-  right: 36px;
+  top: calc(80px + var(--safe-top));
+  right: calc(36px + var(--safe-right));
   background: #16354a;
   color: #ffffff;
   border-radius: 8px;
@@ -1813,10 +1825,11 @@ nav button.active svg {
 /* Account Setup & Modals */
 .account-gate {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   background: var(--bg-gate);
-  padding: 24px;
+  padding: max(24px, var(--safe-top)) max(24px, var(--safe-right)) max(24px, var(--safe-bottom)) max(24px, var(--safe-left));
 }
 
 .modal-backdrop {
@@ -1825,7 +1838,7 @@ nav button.active svg {
   background: rgba(6, 18, 30, 0.6);
   display: grid;
   place-items: center;
-  padding: 20px;
+  padding: max(20px, var(--safe-top)) max(20px, var(--safe-right)) max(20px, var(--safe-bottom)) max(20px, var(--safe-left));
   z-index: 50;
 }
 
@@ -1962,7 +1975,8 @@ nav button.active svg {
 /* Legal Agreements */
 .legal-gate {
   min-height: 100vh;
-  padding: 32px 18px;
+  min-height: 100dvh;
+  padding: max(32px, var(--safe-top)) max(18px, var(--safe-right)) max(32px, var(--safe-bottom)) max(18px, var(--safe-left));
   background: var(--bg-legal);
   color: var(--text-primary);
 }
@@ -2074,7 +2088,7 @@ nav button.active svg {
     inset: 0 auto 0 0;
     transform: translateX(-100%);
     transition: transform 0.22s ease;
-    width: 245px;
+    width: min(260px, 82vw);
   }
 
   .sidebar.open {
@@ -2082,7 +2096,9 @@ nav button.active svg {
   }
 
   .close-nav {
-    display: block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     margin-left: auto;
     border: 0;
     background: none;
@@ -2099,11 +2115,13 @@ nav button.active svg {
   }
 
   .menu-toggle {
-    display: block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .topbar {
-    padding: 0 20px;
+    padding: var(--safe-top) max(20px, calc(16px + var(--safe-right))) 0 max(20px, calc(16px + var(--safe-left)));
   }
 
   .crumb {
@@ -2120,7 +2138,7 @@ nav button.active svg {
   }
 
   .content {
-    padding: 26px 22px 45px;
+    padding: 26px max(22px, var(--safe-right)) calc(45px + var(--safe-bottom)) max(22px, var(--safe-left));
   }
 
   .sync-policy {
@@ -2133,8 +2151,13 @@ nav button.active svg {
 }
 
 @media (max-width: 640px) {
+  html {
+    scroll-padding-top: calc(62px + var(--safe-top));
+  }
+
   .topbar {
-    height: 62px;
+    min-height: calc(62px + var(--safe-top));
+    padding: var(--safe-top) max(15px, var(--safe-right)) 0 max(15px, var(--safe-left));
   }
 
   .search {
@@ -2151,7 +2174,7 @@ nav button.active svg {
   }
 
   .content {
-    padding: 22px 15px 36px;
+    padding: 22px max(15px, var(--safe-right)) calc(36px + var(--safe-bottom)) max(15px, var(--safe-left));
   }
 
   .page-heading {
@@ -2227,14 +2250,14 @@ nav button.active svg {
   }
 
   .toast {
-    top: 68px;
-    right: 15px;
-    left: 15px;
+    top: calc(68px + var(--safe-top));
+    right: max(15px, var(--safe-right));
+    left: max(15px, var(--safe-left));
     justify-content: center;
   }
 
   .legal-gate {
-    padding: 12px;
+    padding: max(12px, var(--safe-top)) max(12px, var(--safe-right)) max(16px, var(--safe-bottom)) max(12px, var(--safe-left));
   }
 
   .legal-card {
@@ -2254,5 +2277,34 @@ nav button.active svg {
   .legal-documents {
     padding: 0 12px 10px;
     max-height: 43vh;
+  }
+}
+
+@media (pointer: coarse) {
+  .menu-toggle,
+  .close-nav,
+  .icon-btn,
+  .modal-close {
+    min-block-size: 44px;
+    min-inline-size: 44px;
+  }
+
+  .icon-btn,
+  .modal-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  nav button,
+  .user-mini,
+  .user-btn,
+  .refresh-btn,
+  .outline-btn,
+  .danger-btn,
+  .connection-actions button,
+  .connection-actions a,
+  .calendar-actions .text-btn {
+    min-block-size: 44px;
   }
 }

@@ -73,6 +73,29 @@ app.whenReady().then(async () => {
     assert.equal(empty.schedule.length, 0)
     const legacy = await extract('<p>Week of 20/09/2026-26/09/2026</p>' + weekdays.map((day, index) => `<div class="bkgCalViewWDHeader" style="left:${4 + index * 13}%">${day}</div>`).join('') + '<div class="bkgCalViewItem" style="left:56%">GLIS1903-1A<br>10:00-10:50<br>KK315</div>', 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable')
     assert.equal(legacy.schedule[0].date, '2026-09-24')
+    const myWeeklyCss = '<style>.bkgCalViewcontainer{position:relative;top:0;left:0}.bkgCalViewWDHeader,.bkgCalViewEmptyCell{width:10em;height:2em;box-sizing:border-box;font-size:10pt;border:1px solid #ccc}.bkgCalViewbg{box-sizing:border-box;font-size:10pt;table-layout:fixed;border:1px solid #ccc;border-collapse:collapse;width:auto;position:absolute;top:0;left:0}.bkgCalViewTimelbl,.bkgCalViewtimelbl{box-sizing:border-box;font-size:10pt;width:3em;height:2em;border-right:1px solid #ccc}.bkgCalViewItemLec{position:absolute;box-sizing:border-box;font-size:10pt;border:2px dashed #00a0ff}</style>'
+    const myWeeklyGrid = `<table class="bkgCalViewbg" style="width:73em"><tr><th class="bkgCalViewtimelbl">&nbsp;</th>${weekdays.map(d => `<th class="bkgCalViewWDHeader">${d}</th>`).join('')}</tr><tr><td class="bkgCalViewTimelbl">&nbsp;</td>${weekdays.map(() => '<td class="bkgCalViewEmptyCell">&nbsp;</td>').join('')}</tr></table>`
+    const myWeeklyNextUrl = 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable?week=1'
+    const myWeeklyLive = await extract(
+      `${myWeeklyCss}<p>Week of 15/11/2026-21/11/2026</p><a href="${myWeeklyNextUrl}">Next Week</a><div class="bkgCalViewcontainer">${myWeeklyGrid}` +
+        '<div class="bkgCalViewItemLec" style="top:6.8em;left:13em;width:10em;height:10em"><font size="-2">CAES1001-1C3<br>09:00-11:50<br>CPD-LG.62</font></div>' +
+        '<div class="bkgCalViewItemLec" style="top:18.8em;left:23em;width:10em;height:2em"><font size="-2">GLIS1901-1A<br>12:00-12:50<br>MW325</font></div>' +
+        '<div class="bkgCalViewItemLec" style="top:6.8em;left:33em;width:10em;height:10em"><font size="-2">GLIS1905-1A<br>09:00-11:50<br>MB100</font></div>' +
+        '<div class="bkgCalViewItemLec" style="top:22.8em;left:43em;width:5em;height:2em"><font size="-2">GLIS1901-1A<br>13:00-13:50<br>TT403</font></div>' +
+        '<div class="bkgCalViewItemLec" style="top:22.8em;left:48em;width:5em;height:6em"><font size="-2">GLIS1908-1A<br>13:00-14:50<br>MWT5</font></div>' +
+        '<div class="bkgCalViewItemLec" style="top:10.8em;left:53em;width:10em;height:6em"><font size="-2">GLIS1903-1A<br>10:00-11:50<br>KK315</font></div></div>',
+      'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable',
+      {
+        [myWeeklyNextUrl]: `${myWeeklyCss}<p>Week of 22/11/2026-28/11/2026</p><div class="bkgCalViewcontainer">${myWeeklyGrid}<div class="bkgCalViewItemLec" style="top:6.8em;left:33em;width:10em;height:10em">GLIS1905-1A<br>09:00-11:50<br>MB100</div></div>`,
+      },
+    )
+    assert.equal(myWeeklyLive.schedule.find(i => i.title === 'CAES1001-1C3')?.date, '2026-11-16', 'left:13em maps to MON without collapsed-border -1d shift')
+    assert.equal(myWeeklyLive.schedule.find(i => i.title === 'GLIS1901-1A' && i.start === '12:00')?.date, '2026-11-17', 'left:23em maps to TUE')
+    assert.equal(myWeeklyLive.schedule.find(i => i.title === 'GLIS1905-1A' && i.date === '2026-11-18')?.day, 'WED', 'left:33em maps to WED')
+    assert.equal(myWeeklyLive.schedule.find(i => i.room === 'TT403')?.date, '2026-11-19', 'overlapping left:43em width:5em maps to THU')
+    assert.equal(myWeeklyLive.schedule.find(i => i.room === 'MWT5')?.date, '2026-11-19', 'overlapping left:48em width:5em maps to THU')
+    assert.equal(myWeeklyLive.schedule.find(i => i.room === 'KK315')?.date, '2026-11-20', 'left:53em maps to FRI')
+    assert.equal(myWeeklyLive.schedule.some(i => i.title === 'GLIS1905-1A' && i.date === '2026-11-25'), true, 'detached DOMParser em layout maps WED accurately')
     const prevWeekUrl = 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable?week=0'
     const nextWeekUrl = 'https://sweb.hku.hk/student/servlet/MyWeekly/showTimetable?week=2'
     const prefetched = await extract(

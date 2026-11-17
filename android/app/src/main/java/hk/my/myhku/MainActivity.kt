@@ -4,7 +4,10 @@ import android.annotation.SuppressLint
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.text.TextUtils
@@ -27,9 +30,14 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.webkit.WebViewAssetLoader
+import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -44,8 +52,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var officialPanel: LinearLayout
     private lateinit var status: TextView
     private lateinit var assetLoader: WebViewAssetLoader
+    private var topInsetBar: View? = null
+    private var bottomInsetBar: View? = null
+    private var bottomDividerView: View? = null
+    private var darkThemeOverride: Boolean? = null
     private var snapshotPrefs: android.content.SharedPreferences? = null
-    private var latestPayload = "{\"version\":4,\"connected\":false}"
+    private var latestPayload = "{\"version\":4,\"scheduleSchema\":2,\"connected\":false}"
     private val sitePayloads = mutableMapOf<String, String>()
     private val connectorSource: String by lazy {
         val raw = runCatching {
@@ -62,8 +74,108 @@ class MainActivity : AppCompatActivity() {
         "login.live.com", "account.live.com", "account.microsoft.com"
     )
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
+
+    private fun isEffectiveDarkTheme(): Boolean {
+        darkThemeOverride?.let { return it }
+        return (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+    }
+
+    private fun applySystemBarAppearance() {
+        val dark = isEffectiveDarkTheme()
+        val supportsLightNavButtons = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1
+        val topColor = if (dark) 0xFF0B1420.toInt() else 0xFF102A43.toInt()
+        val bottomColor = when {
+            dark -> 0xFF0B1420.toInt()
+            supportsLightNavButtons -> 0xFFF4F7FB.toInt()
+            else -> 0xFF102A43.toInt()
+        }
+        val dividerColor = if (dark) 0xFF22354C.toInt() else 0xFFE3EAF2.toInt()
+        topInsetBar?.setBackgroundColor(topColor)
+        bottomInsetBar?.setBackgroundColor(bottomColor)
+        bottomDividerView?.setBackgroundColor(dividerColor)
+        @Suppress("DEPRECATION")
+        run {
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.TRANSPARENT
+        }
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.isAppearanceLightStatusBars = false
+        if (supportsLightNavButtons) {
+            controller.isAppearanceLightNavigationBars = !dark
+        }
+    }
+
+    private fun setBoundedContentView(child: View) {
+        val topBar = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
+        }
+        val bodyHost = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            addView(
+                child,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+        val bottomDivider = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1))
+            visibility = View.GONE
+        }
+        val bottomBar = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0)
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            addView(topBar)
+            addView(bodyHost)
+            addView(bottomDivider)
+            addView(bottomBar)
+        }
+        topInsetBar = topBar
+        bottomInsetBar = bottomBar
+        bottomDividerView = bottomDivider
+        applySystemBarAppearance()
+
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, windowInsets ->
+            val systemInsets = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+            val imeInsets = windowInsets.getInsets(WindowInsetsCompat.Type.ime())
+            val topHeight = systemInsets.top
+            val bottomHeight = maxOf(systemInsets.bottom, imeInsets.bottom)
+            if (topBar.layoutParams.height != topHeight) {
+                topBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, topHeight)
+            }
+            if (bottomBar.layoutParams.height != bottomHeight) {
+                bottomBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, bottomHeight)
+            }
+            bottomDivider.visibility = if (bottomHeight > 0 && imeInsets.bottom == 0) View.VISIBLE else View.GONE
+            bodyHost.setPadding(systemInsets.left, 0, systemInsets.right, 0)
+            WindowInsetsCompat.CONSUMED
+        }
+        setContentView(root)
+        ViewCompat.requestApplyInsets(root)
+    }
+
+    private fun sanitizeCachedSitePayload(raw: String): String {
+        val parsed = runCatching { JSONObject(raw) }.getOrNull() ?: return raw
+        if (parsed.optInt("scheduleSchema", 0) >= SCHEDULE_CACHE_SCHEMA) return raw
+        parsed.remove("schedule")
+        parsed.remove("scheduleWeek")
+        parsed.remove("scheduleWeeks")
+        return parsed.toString()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         if (!hasLegalConsent()) {
             showLegalAgreement { initializeApp(savedInstanceState) }
             return
@@ -77,11 +189,11 @@ class MainActivity : AppCompatActivity() {
     private fun showLegalAgreement(onAccepted: () -> Unit) {
         val legal = legalDocuments()
         val documents = legal.getJSONArray("documents")
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(36, 28, 36, 28) }
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(20), dp(20), dp(24)) }
         content.addView(TextView(this).apply { text = "MyHKU · 使用须知"; textSize = 24f })
         content.addView(TextView(this).apply { text = "独立开发的学习工具，非 HKU 官方应用。请阅读并逐项确认。协议版本：${legal.getString("version")}"; textSize = 15f })
         val checks = mutableListOf<CheckBox>()
-        val accept = Button(this).apply { text = "同意并继续"; isEnabled = false }
+        val accept = Button(this).apply { text = "同意并继续"; isEnabled = false; minHeight = dp(48); minimumHeight = dp(48) }
         for (index in 0 until documents.length()) {
             val document = documents.getJSONObject(index)
             content.addView(TextView(this).apply { text = "\n${document.getString("title")}"; textSize = 20f })
@@ -89,12 +201,13 @@ class MainActivity : AppCompatActivity() {
             content.addView(TextView(this).apply { text = (0 until paragraphs.length()).joinToString("\n\n") { paragraphs.getString(it) }; textSize = 15f })
             val check = CheckBox(this).apply {
                 text = "我已阅读并同意《${document.getString("title")}》"
+                minHeight = dp(44)
                 setOnCheckedChangeListener { _, _ -> accept.isEnabled = checks.size == documents.length() && checks.all { it.isChecked } }
             }
             checks.add(check); content.addView(check)
         }
         content.addView(accept)
-        content.addView(Button(this).apply { text = "不同意并退出"; setOnClickListener { finish() } })
+        content.addView(Button(this).apply { text = "不同意并退出"; minHeight = dp(48); minimumHeight = dp(48); setOnClickListener { finish() } })
         accept.setOnClickListener {
             if (!checks.all { it.isChecked }) return@setOnClickListener
             val saved = getSharedPreferences("myhku_legal", MODE_PRIVATE).edit()
@@ -103,7 +216,7 @@ class MainActivity : AppCompatActivity() {
                 .commit()
             if (saved) onAccepted() else Toast.makeText(this, "无法保存协议确认，请重试", Toast.LENGTH_LONG).show()
         }
-        setContentView(ScrollView(this).apply { addView(content) })
+        setBoundedContentView(ScrollView(this).apply { isFillViewport = true; addView(content) })
     }
 
     private fun isAllowedHost(host: String?): Boolean {
@@ -164,7 +277,7 @@ class MainActivity : AppCompatActivity() {
         }.getOrNull()
 
         for (site in listOf("moodle", "portal", "sis")) {
-            snapshotPrefs?.getString(site, null)?.let { sitePayloads[site] = it }
+            snapshotPrefs?.getString(site, null)?.let { sitePayloads[site] = sanitizeCachedSitePayload(it) }
         }
         latestPayload = combinePayloads()
 
@@ -211,32 +324,32 @@ class MainActivity : AppCompatActivity() {
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(16, 12, 16, 12)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            minimumHeight = dp(52)
             setBackgroundColor(0xFF0E2033.toInt())
         }
-        val backBtn = Button(this).apply {
-            text = "← 仪表盘"
-            setOnClickListener { showDashboard() }
+        fun compactToolbarButton(label: String, action: () -> Unit) = Button(this).apply {
+            text = label
+            textSize = 12f
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = dp(44)
+            minimumHeight = dp(44)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setOnClickListener { action() }
         }
+        val backBtn = compactToolbarButton("← 仪表盘") { showDashboard() }
         status = TextView(this).apply {
             text = "HKU 官方页面"
             setTextColor(0xFFE2ECF5.toInt())
+            textSize = 13f
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            setPadding(16, 0, 12, 0)
+            setPadding(dp(10), 0, dp(8), 0)
         }
-        val portalBtn = Button(this).apply {
-            text = "Portal/SIS"
-            setOnClickListener { showOfficial(PORTAL_URL) }
-        }
-        val moodleBtn = Button(this).apply {
-            text = "Moodle"
-            setOnClickListener { showOfficial(MOODLE_CAS_URL) }
-        }
-        val reloadBtn = Button(this).apply {
-            text = "刷新"
-            setOnClickListener { if (::webView.isInitialized) webView.reload() }
-        }
+        val portalBtn = compactToolbarButton("Portal/SIS") { showOfficial(PORTAL_URL) }
+        val moodleBtn = compactToolbarButton("Moodle") { showOfficial(MOODLE_CAS_URL) }
+        val reloadBtn = compactToolbarButton("刷新") { if (::webView.isInitialized) webView.reload() }
         toolbar.addView(backBtn)
         toolbar.addView(status, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         toolbar.addView(portalBtn)
@@ -284,7 +397,7 @@ class MainActivity : AppCompatActivity() {
             ViewGroup.LayoutParams.MATCH_PARENT,
         ))
 
-        setContentView(container)
+        setBoundedContentView(container)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -447,7 +560,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun combinePayloads(): String {
-        val combined = JSONObject().put("version", 4).put("connected", false)
+        val combined = JSONObject().put("version", 4).put("scheduleSchema", SCHEDULE_CACHE_SCHEMA).put("connected", false)
         val arrays = listOf("courses", "assignments", "announcements", "resources", "grades", "schedule")
         arrays.forEach { combined.put(it, JSONArray()) }
         val seenByField = arrays.associateWith { mutableSetOf<String>() }
@@ -531,7 +644,7 @@ class MainActivity : AppCompatActivity() {
         fun clearAccount(): Boolean {
             sitePayloads.clear()
             snapshotPrefs?.edit()?.clear()?.apply()
-            latestPayload = "{\"version\":4,\"connected\":false}"
+            latestPayload = "{\"version\":4,\"scheduleSchema\":2,\"connected\":false}"
             runOnUiThread {
                 CookieManager.getInstance().removeAllCookies(null)
                 CookieManager.getInstance().flush()
@@ -544,6 +657,14 @@ class MainActivity : AppCompatActivity() {
                 showDashboard()
             }
             return true
+        }
+
+        @android.webkit.JavascriptInterface
+        fun setThemeAppearance(isDark: Boolean) {
+            runOnUiThread {
+                darkThemeOverride = isDark
+                applySystemBarAppearance()
+            }
         }
 
         @android.webkit.JavascriptInterface
@@ -569,6 +690,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val SCHEDULE_CACHE_SCHEMA = 2
         private const val DASHBOARD_ASSET_URL = "https://appassets.androidplatform.net/assets/dashboard-app/index.html"
         private const val MOODLE_URL = "https://moodle.hku.hk/my/"
         private const val MOODLE_CAS_URL = "https://moodle.hku.hk/login/index.php?authCAS=CAS"

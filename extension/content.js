@@ -504,17 +504,39 @@
     })
     if (!schedule.length) {
       const headers = Array.from(rootDocument.querySelectorAll('.bkgCalViewWDHeader, .bkgCalViewwdheader'))
-      const position = node => {
-        const match = (node.getAttribute('style') || '').match(/left\s*:\s*([\d.]+)(%|px)/i)
-        return match ? { value: Number(match[1]), unit: match[2] } : null
+      const styleLength = (node, prop) => {
+        const match = (node?.getAttribute?.('style') || '').match(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([\\d.]+)(%|px|em|rem)`, 'i'))
+        return match ? { value: Number(match[1]), unit: match[2].toLowerCase() } : null
       }
       rootDocument.querySelectorAll('[class*="bkgCalViewItem"]').forEach(node => {
-        const pos = position(node)
-        const matching = headers.filter(header => position(header)?.unit === pos?.unit)
-        let header = pos && matching.length ? matching.reduce((best, item) => Math.abs(position(item).value - pos.value) < Math.abs(position(best).value - pos.value) ? item : best) : null
+        const pos = styleLength(node, 'left')
+        const width = styleLength(node, 'width')
+        const matching = pos ? headers.filter(header => styleLength(header, 'left')?.unit === pos.unit) : []
+        let header = pos && matching.length
+          ? matching.reduce((best, item) => Math.abs(styleLength(item, 'left').value - pos.value) < Math.abs(styleLength(best, 'left').value - pos.value) ? item : best)
+          : null
         if (!header) {
-          const rect = node.getBoundingClientRect()
-          if (rect.width) header = headers.find(item => { const h = item.getBoundingClientRect(); return h.width && rect.left >= h.left - 2 && rect.left < h.right })
+          const rect = node.getBoundingClientRect?.()
+          if (rect && rect.width > 0) {
+            const centerX = rect.left + rect.width / 2
+            const measured = headers
+              .map(item => ({ item, rect: item.getBoundingClientRect() }))
+              .filter(entry => entry.rect.width > 0)
+            if (measured.length && (measured.length === 1 || Math.abs(measured[measured.length - 1].rect.left - measured[0].rect.left) > 4)) {
+              header = measured.find(entry => centerX >= entry.rect.left && centerX < entry.rect.right)?.item ||
+                measured.reduce((best, entry) =>
+                  Math.abs(entry.rect.left + entry.rect.width / 2 - centerX) < Math.abs(best.rect.left + best.rect.width / 2 - centerX)
+                    ? entry
+                    : best
+                ).item
+            }
+          }
+        }
+        if (!header && pos && pos.unit === 'em' && headers.length === 7) {
+          // HKU MyWeekly positions items against a 3em time gutter + seven 10em weekday columns.
+          const centerEm = pos.value + (width?.unit === 'em' ? width.value / 2 : 5)
+          const colIndex = Math.floor((centerEm - 3) / 10)
+          if (colIndex >= 0 && colIndex < headers.length) header = headers[colIndex]
         }
         add(node, clean(header?.textContent))
       })
@@ -702,6 +724,7 @@
       if (globalThis.MyHKU && typeof globalThis.MyHKU.ingest === 'function') {
         globalThis.MyHKU.ingest(JSON.stringify({
           version: 4,
+          scheduleSchema: 2,
           site: host,
           siteKey: site,
           fetchedAt: new Date().toISOString(),
