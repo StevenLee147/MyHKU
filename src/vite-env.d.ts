@@ -11,6 +11,7 @@ interface Window {
     refreshHku?: () => Promise<number>
     downloadResource?: (url: string) => Promise<number>
     downloadResourceDetailed?: (url: string) => Promise<DesktopDownloadResult>
+    getDownloadedIndex?: () => Promise<Record<string, string[]>>
     openDownloadedFile?: (filePath: string) => Promise<boolean>
     revealDownloadedFile?: (filePath: string) => Promise<boolean>
     authSessions?: () => Promise<DesktopSessions>

@@ -319,7 +319,17 @@ export function clearConnections() {
   for (const key of Object.keys(latestDesktopSessions) as HkuSite[]) {
     delete latestDesktopSessions[key]
   }
-  for (const key of [STATE_KEY, SNAPSHOT_KEY, LAST_SYNC_KEY, LAST_SYNC_MS_KEY, 'myhku-custom-tasks']) {
+  for (const key of [
+    STATE_KEY,
+    SNAPSHOT_KEY,
+    LAST_SYNC_KEY,
+    LAST_SYNC_MS_KEY,
+    'myhku-custom-tasks',
+    'myhku-pinned-resources',
+    'myhku-seen-resources',
+    'myhku-new-resources',
+    'myhku-downloaded-index',
+  ]) {
     try { localStorage.removeItem(key) } catch { /* ignore */ }
   }
   clearNotificationState()

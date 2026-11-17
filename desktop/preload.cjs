@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
   refreshHku: () => ipcRenderer.invoke('myhku-refresh-hku'),
   downloadResource: (url) => ipcRenderer.invoke('myhku-download-resource', String(url)),
   downloadResourceDetailed: (url) => ipcRenderer.invoke('myhku-download-resource-detailed', String(url)),
+  getDownloadedIndex: () => ipcRenderer.invoke('myhku-get-downloaded-index'),
   openDownloadedFile: (filePath) => ipcRenderer.invoke('myhku-open-downloaded-file', String(filePath)),
   revealDownloadedFile: (filePath) => ipcRenderer.invoke('myhku-reveal-downloaded-file', String(filePath)),
   accountStatus: () => ipcRenderer.invoke('myhku-account-status'),

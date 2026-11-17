@@ -372,3 +372,54 @@ test('customTasks CRUD and buildIcsCalendar export valid Asia/Hong_Kong VEVENTs 
   }
 })
 // end v0.2.6 tests
+
+test('materials service classifies kinds, pins items, tracks NEW badges after baseline, and persists local download index', async () => {
+  const storage = new Map()
+  globalThis.localStorage = {
+    getItem: key => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, val) => storage.set(key, String(val)),
+    removeItem: key => storage.delete(key),
+  }
+  try {
+    const {
+      classifyResourceKind,
+      togglePinnedResource,
+      getPinnedResourceIds,
+      evaluateNewResources,
+      markResourceOpened,
+      recordLocalDownloadedPaths,
+      getLocalDownloadedIndex,
+    } = await loadTsModule('src/services/materials.ts')
+
+    assert.equal(classifyResourceKind('Week 1 Lecture Slides', 'https://moodle.hku.hk/pluginfile.php/1/deck.pptx'), 'slides')
+    assert.equal(classifyResourceKind('Course Syllabus.pdf', 'https://moodle.hku.hk/mod/resource/view.php?id=10'), 'pdf')
+    assert.equal(classifyResourceKind('Tutorial Files', 'https://moodle.hku.hk/mod/folder/view.php?id=11'), 'folder')
+    assert.equal(classifyResourceKind('External Reading', 'https://moodle.hku.hk/mod/url/view.php?id=12'), 'link')
+
+    togglePinnedResource('r1')
+    assert.equal(getPinnedResourceIds().has('r1'), true)
+    togglePinnedResource('r1')
+    assert.equal(getPinnedResourceIds().has('r1'), false)
+
+    // Baseline sync sets seen IDs without marking initial resources NEW.
+    const initialNew = evaluateNewResources([{ id: 'r1', title: 'Slides 1', course: 'GLIS1905' }])
+    assert.equal(initialNew.size, 0)
+
+    // Next sync with r2 marks only r2 as NEW.
+    const secondNew = evaluateNewResources([
+      { id: 'r1', title: 'Slides 1', course: 'GLIS1905' },
+      { id: 'r2', title: 'Slides 2', course: 'GLIS1905' },
+    ])
+    assert.equal(secondNew.has('r1'), false)
+    assert.equal(secondNew.has('r2'), true)
+
+    const afterOpen = markResourceOpened('r2')
+    assert.equal(afterOpen.has('r2'), false)
+
+    recordLocalDownloadedPaths('r1', ['I:\\Downloads\\Slides1.pdf'])
+    assert.deepEqual(getLocalDownloadedIndex().r1, ['I:\\Downloads\\Slides1.pdf'])
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+// end v0.2.7 tests

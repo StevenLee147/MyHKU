@@ -2575,3 +2575,136 @@ dialog.myhku-modal[open] {
   }
 }
 /* end v0.2.6 styles */
+
+/* v0.2.7 Materials Batch, Filters & Badges */
+.materials-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 0 22px 14px;
+}
+
+.filter-pill {
+  border: 1px solid var(--border-color);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 5px 11px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.filter-pill:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.filter-pill.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.batch-progress-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 22px 14px;
+  padding: 9px 13px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.resource-course-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.resource-course-head h3 {
+  margin: 0;
+}
+
+.course-batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.kind-badge {
+  display: inline-block;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 4px;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+.kind-badge.kind-pdf {
+  background: var(--urgent-soft);
+  color: var(--urgent);
+}
+
+.kind-badge.kind-slides {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.kind-badge.kind-doc,
+.kind-badge.kind-sheet {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.new-resource-badge {
+  display: inline-block;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  margin-left: 5px;
+  border-radius: 4px;
+  background: var(--success-soft);
+  color: var(--success);
+  vertical-align: middle;
+}
+
+.resource-row button.pin-btn {
+  padding: 5px 6px;
+  color: var(--text-muted);
+  border-color: var(--border-subtle);
+}
+
+.resource-row button.pin-btn.pinned {
+  color: var(--warning);
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+@media (max-width: 640px) {
+  .materials-filter-bar {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .batch-progress-bar {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+}
+/* end v0.2.7 styles */

@@ -47,6 +47,40 @@ let activeUiPort = Number(uiPort) || 17322
 let dashboard
 const authWindows = new Set()
 const sessionDownloadedPaths = new Set()
+const downloadedIndexByUrl = new Map()
+let downloadedIndexLoaded = false
+const downloadedIndexFile = () => join(app.getPath('userData'), 'myhku-cache-downloads.json')
+
+function ensureDownloadedIndexLoaded() {
+  if (downloadedIndexLoaded) return
+  downloadedIndexLoaded = true
+  try {
+    const raw = JSON.parse(readFileSync(downloadedIndexFile(), 'utf8'))
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
+    for (const [url, list] of Object.entries(raw)) {
+      if (!Array.isArray(list)) continue
+      const valid = list.filter(p => typeof p === 'string' && p.length > 0 && existsSync(p))
+      if (valid.length) {
+        downloadedIndexByUrl.set(url, valid)
+        for (const p of valid) sessionDownloadedPaths.add(p)
+      }
+    }
+  } catch {
+    /* no persisted download index yet */
+  }
+}
+
+function persistDownloadedIndex() {
+  try {
+    mkdirSync(app.getPath('userData'), { recursive: true })
+    const out = Object.fromEntries(downloadedIndexByUrl.entries())
+    const temp = `${downloadedIndexFile()}.${process.pid}.tmp`
+    writeFileSync(temp, JSON.stringify(out), { mode: 0o600 })
+    renameSync(temp, downloadedIndexFile())
+  } catch {
+    /* non-fatal cache write */
+  }
+}
 const windowFlows = new WeakMap()
 const auth = new AuthCoordinator(startServiceLogin, publishAuthStatus)
 let quitting = false
@@ -91,11 +125,13 @@ async function resetAccountSessions() {
   // recreate the signed-out account's session or update a replacement record.
   auth.reset()
   sessionDownloadedPaths.clear()
+  downloadedIndexByUrl.clear()
+  downloadedIndexLoaded = true
   for (const win of authWindows) if (!win.isDestroyed()) win.destroy()
   const official = (await import('electron')).session.fromPartition('persist:myhku-hku')
   await official.clearStorageData()
   await official.clearAuthCache()
-  for (const name of ['myhku-cache.enc.json', 'myhku-cache.key']) {
+  for (const name of ['myhku-cache.enc.json', 'myhku-cache.key', 'myhku-cache-downloads.json']) {
     try { unlinkSync(join(app.getPath('userData'), name)) } catch { /* already absent */ }
   }
   if (servicesStarted) {
@@ -681,12 +717,17 @@ async function performMoodleDownload(url) {
     const fetchPage = value => authenticated.fetch(value, { redirect: 'manual', signal: AbortSignal.timeout(120_000) })
     const urls = await resolveMoodleDownloads(String(url), fetchPage,
       (html, base) => parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`))
+    ensureDownloadedIndexLoaded()
     const directory = app.getPath('downloads')
     const paths = []
     for (const file of urls) {
       const savedPath = await saveMoodleDownload(file, directory, fetchPage)
       sessionDownloadedPaths.add(savedPath)
       paths.push(savedPath)
+    }
+    if (paths.length) {
+      downloadedIndexByUrl.set(String(url), paths)
+      persistDownloadedIndex()
     }
     return { count: paths.length, paths, directory }
   } finally { parser.destroy() }
@@ -699,7 +740,18 @@ handleDashboard('myhku-download-resource', async (_event, url) => {
 
 handleDashboard('myhku-download-resource-detailed', async (_event, url) => performMoodleDownload(url))
 
+handleDashboard('myhku-get-downloaded-index', async () => {
+  ensureDownloadedIndexLoaded()
+  const out = {}
+  for (const [key, list] of downloadedIndexByUrl.entries()) {
+    const valid = list.filter(p => existsSync(p))
+    if (valid.length) out[key] = valid
+  }
+  return out
+})
+
 handleDashboard('myhku-open-downloaded-file', async (_event, targetPath) => {
+  ensureDownloadedIndexLoaded()
   const resolved = String(targetPath || '')
   if (!sessionDownloadedPaths.has(resolved) || !existsSync(resolved)) {
     throw new Error('找不到该已下载文件，可能已被移动或删除')
@@ -710,6 +762,7 @@ handleDashboard('myhku-open-downloaded-file', async (_event, targetPath) => {
 })
 
 handleDashboard('myhku-reveal-downloaded-file', async (_event, targetPath) => {
+  ensureDownloadedIndexLoaded()
   const resolved = String(targetPath || '')
   if (!sessionDownloadedPaths.has(resolved) || !existsSync(resolved)) {
     throw new Error('找不到该已下载文件，可能已被移动或删除')
@@ -717,6 +770,7 @@ handleDashboard('myhku-reveal-downloaded-file', async (_event, targetPath) => {
   shell.showItemInFolder(resolved)
   return true
 })
+// end download ipc
 
 async function waitForSisIdle(sisWindow, timeoutMs = 15_000) {
   if (!sisWindow || sisWindow.isDestroyed() || !sisWindow.webContents.isLoading()) return
