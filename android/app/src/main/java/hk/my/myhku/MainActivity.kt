@@ -57,7 +57,7 @@ class MainActivity : AppCompatActivity() {
     private var bottomDividerView: View? = null
     private var darkThemeOverride: Boolean? = null
     private var snapshotPrefs: android.content.SharedPreferences? = null
-    private var latestPayload = "{\"version\":4,\"scheduleSchema\":2,\"connected\":false}"
+    private var latestPayload = "{\"version\":4,\"scheduleSchema\":2,\"assignmentSchema\":2,\"connected\":false}"
     private val sitePayloads = mutableMapOf<String, String>()
     private val connectorSource: String by lazy {
         val raw = runCatching {
@@ -166,10 +166,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun sanitizeCachedSitePayload(raw: String): String {
         val parsed = runCatching { JSONObject(raw) }.getOrNull() ?: return raw
-        if (parsed.optInt("scheduleSchema", 0) >= SCHEDULE_CACHE_SCHEMA) return raw
-        parsed.remove("schedule")
-        parsed.remove("scheduleWeek")
-        parsed.remove("scheduleWeeks")
+        val validSchedule = parsed.optInt("scheduleSchema", 0) >= SCHEDULE_CACHE_SCHEMA
+        val validAssignments = parsed.optInt("assignmentSchema", 0) >= ASSIGNMENT_CACHE_SCHEMA
+        if (validSchedule && validAssignments) return raw
+        if (!validSchedule) {
+            parsed.remove("schedule")
+            parsed.remove("scheduleWeek")
+            parsed.remove("scheduleWeeks")
+        }
+        if (!validAssignments) {
+            parsed.remove("assignments")
+        }
         return parsed.toString()
     }
 
@@ -560,7 +567,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun combinePayloads(): String {
-        val combined = JSONObject().put("version", 4).put("scheduleSchema", SCHEDULE_CACHE_SCHEMA).put("connected", false)
+        val combined = JSONObject().put("version", 4).put("scheduleSchema", SCHEDULE_CACHE_SCHEMA).put("assignmentSchema", ASSIGNMENT_CACHE_SCHEMA).put("connected", false)
         val arrays = listOf("courses", "assignments", "announcements", "resources", "grades", "schedule")
         arrays.forEach { combined.put(it, JSONArray()) }
         val seenByField = arrays.associateWith { mutableSetOf<String>() }
@@ -644,7 +651,7 @@ class MainActivity : AppCompatActivity() {
         fun clearAccount(): Boolean {
             sitePayloads.clear()
             snapshotPrefs?.edit()?.clear()?.apply()
-            latestPayload = "{\"version\":4,\"scheduleSchema\":2,\"connected\":false}"
+            latestPayload = "{\"version\":4,\"scheduleSchema\":2,\"assignmentSchema\":2,\"connected\":false}"
             runOnUiThread {
                 CookieManager.getInstance().removeAllCookies(null)
                 CookieManager.getInstance().flush()
@@ -691,6 +698,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val SCHEDULE_CACHE_SCHEMA = 2
+        private const val ASSIGNMENT_CACHE_SCHEMA = 2
         private const val DASHBOARD_ASSET_URL = "https://appassets.androidplatform.net/assets/dashboard-app/index.html"
         private const val MOODLE_URL = "https://moodle.hku.hk/my/"
         private const val MOODLE_CAS_URL = "https://moodle.hku.hk/login/index.php?authCAS=CAS"

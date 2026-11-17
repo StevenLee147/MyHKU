@@ -223,10 +223,18 @@ test('notifications parse Moodle due strings, suppress baseline spam, and dedupl
     removeItem: key => storage.delete(key),
   }
   try {
-    const { parseDueTimestamp, evaluateSnapshotNotifications } = await loadTsModule('src/services/notifications.ts')
+    const { parseDueTimestamp, cleanDueDisplay, formatSubmissionStatusLabel, evaluateSnapshotNotifications } = await loadTsModule('src/services/notifications.ts')
     const refNow = new Date('2026-09-22T10:00:00+08:00')
     const parsedToday = parseDueTimestamp('Today, 22 September, 11:59 PM', refNow)
     assert.equal(parsedToday, Date.parse('2026-09-22T23:59:00+08:00'))
+
+    // Opened + Due combined string must extract the Due timestamp, never Opened!
+    const combinedOpenedDue = 'Opened: Tuesday, 1 September 2026, 9:00 AM Due: Thursday, 24 September 2026, 11:59 PM'
+    assert.equal(cleanDueDisplay(combinedOpenedDue), 'Thursday, 24 September 2026, 11:59 PM')
+    assert.equal(parseDueTimestamp(combinedOpenedDue, refNow), Date.parse('2026-09-24T23:59:00+08:00'))
+    assert.equal(parseDueTimestamp('Opened: Tuesday, 1 September 2026, 9:00 AM', refNow), null)
+    assert.equal(formatSubmissionStatusLabel('No attempt', undefined), '尚未提交 (No submission)')
+    assert.equal(formatSubmissionStatusLabel('Submitted for grading', true), '已提交评分 (Submitted for grading)')
 
     const baselineSnap = {
       fetchedAt: refNow.toISOString(),
@@ -264,5 +272,51 @@ test('notifications parse Moodle due strings, suppress baseline spam, and dedupl
     assert.equal(thirdAlerts.length, 0)
   } finally {
     delete globalThis.localStorage
+  }
+})
+
+test('bridge sanitizes Opened/Due strings, preserves richer assignment fields on merge, and drops pre-v2 assignment cache', async () => {
+  const bridge = await startTestBridge()
+  try {
+    const postMoodle = async body => {
+      const res = await fetch(`${bridge.baseUrl}/api/ingest/moodle`, {
+        method: 'POST',
+        headers: { Origin: 'https://moodle.hku.hk', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      assert.equal(res.status, 200)
+    }
+    await postMoodle({
+      assignments: [
+        {
+          id: 'module-88',
+          title: 'Submit completed form',
+          course: 'GLIS1905',
+          due: 'Opened: 1 Sep 2026, 9:00 AM Due: Thursday, 24 September 2026, 11:59 PM',
+          submissionStatus: 'No attempt',
+          completed: true,
+        },
+      ],
+    })
+    // Subsequent coarser card ingest without year or status must not overwrite richer fields:
+    await postMoodle({
+      assignments: [
+        {
+          id: '88',
+          title: 'Submit completed form',
+          course: '未提供课程',
+          due: 'Thursday, 24 September',
+        },
+      ],
+    })
+    const snap = await (await fetch(`${bridge.baseUrl}/api/snapshot`)).json()
+    assert.equal(snap.assignments.length, 1)
+    assert.equal(snap.assignments[0].id, '88')
+    assert.equal(snap.assignments[0].course, 'GLIS1905')
+    assert.equal(snap.assignments[0].due, 'Thursday, 24 September 2026, 11:59 PM')
+    assert.equal(snap.assignments[0].submissionStatus, 'No attempt')
+    assert.equal(snap.assignments[0].completed, false, 'No attempt overrides stale completed flag')
+  } finally {
+    await bridge.close()
   }
 })

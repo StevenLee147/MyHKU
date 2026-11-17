@@ -94,10 +94,12 @@ function decodeCacheKey(value) {
 }
 
 const SCHEDULE_CACHE_SCHEMA = 2
+const ASSIGNMENT_CACHE_SCHEMA = 2
 
 function cachePayload() {
   return JSON.stringify({
     scheduleSchema: SCHEDULE_CACHE_SCHEMA,
+    assignmentSchema: ASSIGNMENT_CACHE_SCHEMA,
     fetchedAt: snapshot.fetchedAt,
     scheduleWeek: snapshot.scheduleWeek,
     scheduleWeeks: snapshot.scheduleWeeks,
@@ -114,9 +116,11 @@ function loadEncryptedCache() {
     const data = JSON.parse(Buffer.concat([decipher.update(Buffer.from(record.data, 'base64')), decipher.final()]).toString('utf8'))
     if (!data || typeof data !== 'object') return
     const validSchedule = data.scheduleSchema === SCHEDULE_CACHE_SCHEMA
+    const validAssignments = data.assignmentSchema === ASSIGNMENT_CACHE_SCHEMA
     for (const field of ARRAY_FIELDS) {
       if (field === 'schedule' && !validSchedule) continue
-      if (Array.isArray(data[field])) snapshot[field] = data[field]
+      if (field === 'assignments' && !validAssignments) continue
+      if (Array.isArray(data[field])) snapshot[field] = normalizeArray(field, data[field]) || []
     }
     if (validSchedule) {
       const week = normalizeWeekRange(data.scheduleWeek)
@@ -142,8 +146,6 @@ function saveEncryptedCache() {
     fs.renameSync(temp, CACHE_FILE)
   } catch { /* cache is an optimization; never fail a live sync */ }
 }
-
-loadEncryptedCache()
 
 
 function isLocalOrigin(origin) {
@@ -239,12 +241,33 @@ function normalizeCourse(item, index) {
   return { id: idOf(item.id, `course-${index}-${title}`), title, ...(clean(item.code) ? { code: clean(item.code, 80) } : {}) }
 }
 
+function sanitizeBridgeDue(raw) {
+  const text = clean(raw, 240)
+  if (!text) return undefined
+  const explicit = text.match(/(?:\b(?:due(?:\s+date)?|closes?|closing(?:\s+date)?|deadline)\b|截止(?:日期|时间|時間)?|到期(?:日期|时间|時間)?)\s*[:：]?\s*(.+?)(?=\s+(?:\b(?:opened|opens?|opening|time\s+remaining|grading\s+status|submission\s+status|last\s+modified)\b|开放|開放|剩余|剩餘)|$)/i)
+  if (explicit && clean(explicit[1], 120)) return clean(explicit[1], 120)
+  if (/^(?:opened|opens?|opening|开放|開放)\b/i.test(text) && !/(?:\b(?:due|closes?|deadline)\b|截止|到期)/i.test(text)) {
+    return undefined
+  }
+  return clean(text.replace(/^(?:due(?:\s+date)?|closes?|deadline|截止(?:日期|时间|時間)?|到期(?:日期|时间|時間)?)\s*[:：]?\s*/i, ''), 120)
+}
+
+function inferCompletedFromStatus(status, explicitCompleted) {
+  if (status) {
+    if (/no\s*submission|not\s*submitted|no\s*attempt|nothing\s*has\s*been\s*submitted|draft|overdue|to\s*do|incomplete|未提交|尚未提交|未尝试|未嘗試|草稿|待办|待辦|未完成/i.test(status)) return false
+    if (/submitted\s*for\s*grading|submitted|graded|complete|completed|done|已提交|已评分|已評分|已完成/i.test(status)) return true
+  }
+  return explicitCompleted
+}
+
 function normalizeAssignment(item, index) {
   if (!item || typeof item !== 'object') return null
   const title = clean(item.title || item.name)
   if (!title) return null
-  const completed = bool(item.completed)
-  return { id: idOf(item.id, `assignment-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(clean(item.due) ? { due: clean(item.due, 120) } : {}), ...(clean(item.submissionStatus) ? { submissionStatus: clean(item.submissionStatus, 160) } : {}), ...(completed === undefined ? {} : { completed }) }
+  const status = clean(item.submissionStatus, 160)
+  const due = sanitizeBridgeDue(item.due)
+  const completed = inferCompletedFromStatus(status, bool(item.completed))
+  return { id: idOf(item.id, `assignment-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(completed === undefined ? {} : { completed }) }
 }
 
 function normalizeResource(item, index) {
@@ -283,6 +306,8 @@ function normalizeArray(field, value) {
   return value.map(fn).filter(Boolean).slice(0, 1000)
 }
 
+loadEncryptedCache()
+
 function mergeById(existing, incoming, field) {
   // A Moodle page often exposes only one data section at a time. Keep the
   // other sections until a caller explicitly asks for replacement.
@@ -290,7 +315,32 @@ function mergeById(existing, incoming, field) {
   const merged = new Map(existing.map(item => [identity(item), { ...item, id: identity(item) }]))
   for (const item of incoming) {
     const id = identity(item)
-    merged.set(id, { ...merged.get(id), ...item, id })
+    const prev = merged.get(id)
+    if (prev && field === 'assignments') {
+      const pickDue = (a, b) => {
+        if (!a) return b
+        if (!b) return a
+        const hasYearA = /\b20\d{2}\b/.test(a)
+        const hasYearB = /\b20\d{2}\b/.test(b)
+        if (hasYearB && !hasYearA) return b
+        if (hasYearA && !hasYearB) return a
+        return b.length >= a.length ? b : a
+      }
+      const due = pickDue(prev.due, item.due)
+      const submissionStatus = item.submissionStatus || prev.submissionStatus
+      const completed = item.completed !== undefined ? item.completed : prev.completed
+      const course = (item.course && item.course !== '未提供课程') ? item.course : (prev.course || '未提供课程')
+      merged.set(id, {
+        id,
+        title: item.title || prev.title,
+        course,
+        ...(due ? { due } : {}),
+        ...(submissionStatus ? { submissionStatus } : {}),
+        ...(completed !== undefined ? { completed } : {}),
+      })
+    } else {
+      merged.set(id, { ...prev, ...item, id })
+    }
   }
   return [...merged.values()].slice(0, 1000)
 }

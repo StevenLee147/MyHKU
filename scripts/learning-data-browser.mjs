@@ -155,7 +155,50 @@ app.whenReady().then(async () => {
     assert.equal(moodle.grades.find(g => g.title === 'Assignment 2')?.value, undefined)
     const direct = await extract(overview, overviewUrl, { [courseUrl]: course, [overviewUrl]: overview })
     assert.equal(direct.assignments.length, 2, 'visiting overview directly deduplicates course cards')
-    console.log('PASS Moodle overview due dates, submission state, course association and deduplication')
+
+    const trickyCourseUrl = 'https://moodle.hku.hk/course/view.php?id=456'
+    const assign21DetailUrl = 'https://moodle.hku.hk/mod/assign/view.php?id=21'
+    const assignIndexUrl = 'https://moodle.hku.hk/mod/assign/index.php?id=456'
+    const trickyCourseHtml = `
+      <h1>GLIS1905 Seminar</h1>
+      <li class="activity" id="module-21">
+        <a href="/mod/assign/view.php?id=21">Submit completed declaration form</a>
+        <div data-region="activity-dates">
+          <div><strong>Opened:</strong> Tuesday, 1 September 2026, 9:00 AM</div>
+          <div><strong>Due:</strong> Thursday, 24 September 2026, 11:59 PM</div>
+        </div>
+        <div data-region="completion-info"><button data-action="toggle-manual-completion">Mark as done</button></div>
+      </li>
+      <li class="activity" id="module-22">
+        <a href="/mod/quiz/view.php?id=22">Midterm Quiz</a>
+        <div class="activity-dates">
+          <div>Opened: Monday, 21 September 2026, 10:00 AM</div>
+          <div>Closes: Friday, 25 September 2026, 5:00 PM</div>
+        </div>
+        <div data-region="completion-info"><span class="badge">Done: Receive a grade</span></div>
+      </li>
+      <li class="activity" id="module-23">
+        <a href="/mod/turnitintooltwo/view.php?id=23">Final Essay Turnitin</a>
+      </li>
+    `
+    const assign21DetailHtml = '<table class="generaltable"><tr><th>Submission status</th><td>No attempt</td></tr><tr><th>Grading status</th><td>Not graded</td></tr><tr><th>Due date</th><td>Thursday, 24 September 2026, 11:59 PM</td></tr></table>'
+    const assignIndexHtml = '<table><thead><tr><th>Name</th><th>Due date</th><th>Status</th></tr></thead><tbody><tr><td><a href="/mod/turnitintooltwo/view.php?id=23">Final Essay Turnitin</a></td><td>Monday, 30 November 2026, 11:59 PM</td><td>Submitted for grading</td></tr></tbody></table>'
+    const trickyMoodle = await extract(`<a href="${trickyCourseUrl}">GLIS1905 Seminar</a>`, 'https://moodle.hku.hk/my/', {
+      [trickyCourseUrl]: trickyCourseHtml,
+      [assignIndexUrl]: assignIndexHtml,
+      [assign21DetailUrl]: assign21DetailHtml,
+    })
+    const a21 = trickyMoodle.assignments.find(a => a.id === '21')
+    const q22 = trickyMoodle.assignments.find(a => a.id === '22')
+    const t23 = trickyMoodle.assignments.find(a => a.id === '23')
+    assert.equal(a21?.due, 'Thursday, 24 September 2026, 11:59 PM', 'must extract Due date rather than Opened date')
+    assert.equal(a21?.completed, false, 'title containing completed must not falsely mark unsubmitted assignment done')
+    assert.equal(a21?.submissionStatus, 'No attempt', 'individual assign detail view backfills submissionStatus')
+    assert.equal(q22?.due, 'Friday, 25 September 2026, 5:00 PM', 'quiz Closes date extracted accurately')
+    assert.equal(q22?.completed, true, 'quiz completion badge Done sets completed true')
+    assert.equal(t23?.due, 'Monday, 30 November 2026, 11:59 PM', 'turnitin item merged from index summary')
+    assert.equal(t23?.completed, true)
+    console.log('PASS Moodle overview due dates, Opened/Due separation, false-positive guard, quiz/turnitin & detail fallback')
 
     const parseHtml = (html, base) => run(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`)
     const file = 'https://moodle.hku.hk/pluginfile.php/123/mod_resource/content/1/lecture.pdf'

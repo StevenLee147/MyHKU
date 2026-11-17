@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { ArrowLeft, Bell, BookOpen, ChevronRight, Download, ExternalLink, FileText, RefreshCw, Trophy } from 'lucide-react'
 import { safeHkuUrl, type LiveCourse, type LiveSnapshot } from '../services/hku'
-import { formatDueBadge, sortAssignmentsByDue } from '../services/notifications'
+import { cleanDueDisplay, formatDueBadge, formatSubmissionStatusLabel, sortAssignmentsByDue } from '../services/notifications'
 
 function matchesCourse(itemCourse: string, target: LiveCourse): boolean {
   const normalizedItem = itemCourse.trim().toLowerCase()
@@ -93,8 +93,8 @@ export function MoodlePage({
                     </span>
                     <span>
                       <strong>{item.title}</strong>
-                      <small>截止：{item.due || '未提供截止时间'}（{badge.text}）</small>
-                      <small>{item.submissionStatus || (item.completed === true ? '已提交' : item.completed === false ? '未提交' : '提交状态未提供')}</small>
+                      <small>截止：{cleanDueDisplay(item.due)}（{badge.text}）</small>
+                      <small>{formatSubmissionStatusLabel(item.submissionStatus, item.completed)}</small>
                     </span>
                   </div>
                 )
@@ -233,8 +233,8 @@ export function MoodlePage({
                   <span>
                     {item.title}
                     <small>{item.course}</small>
-                    <small>截止：{item.due || '未提供截止时间'}</small>
-                    <small>{item.submissionStatus || (item.completed === true ? '已提交' : item.completed === false ? '未提交' : '提交状态未提供')}</small>
+                    <small>截止：{cleanDueDisplay(item.due)}</small>
+                    <small>{formatSubmissionStatusLabel(item.submissionStatus, item.completed)}</small>
                   </span>
                 </div>
               )

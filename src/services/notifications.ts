@@ -59,19 +59,41 @@ function buildHkEpoch(year: number, month: number, day: number, hour: number, mi
   return Date.parse(iso)
 }
 
+function stripToDueSegment(raw: string): string {
+  const text = raw.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  const explicit = text.match(/(?:\b(?:due(?:\s+date)?|closes?|closing(?:\s+date)?|deadline)\b|截止(?:日期|时间|時間)?|到期(?:日期|时间|時間)?)\s*[:：]?\s*(.+?)(?=\s+(?:\b(?:opened|opens?|opening|time\s+remaining|grading\s+status|submission\s+status|last\s+modified)\b|开放|開放|剩余|剩餘)|$)/i)
+  if (explicit && explicit[1]?.trim()) return explicit[1].trim()
+  if (/^(?:opened|opens?|opening|开放|開放)\b/i.test(text) && !/(?:\b(?:due|closes?|deadline)\b|截止|到期)/i.test(text)) {
+    return ''
+  }
+  return text.replace(/^(?:due(?:\s+date)?|closes?|deadline|截止(?:日期|时间|時間)?|到期(?:日期|时间|時間)?)\s*[:：]?\s*/i, '').trim()
+}
+
+export function cleanDueDisplay(raw?: string): string {
+  if (!raw) return '未提供截止时间'
+  const cleaned = stripToDueSegment(raw)
+  return cleaned || '未提供截止时间'
+}
+
 /** Parse ISO timestamps or Moodle human-readable due strings in Asia/Hong_Kong. */
 export function parseDueTimestamp(raw?: string, now = new Date()): number | null {
   if (!raw) return null
-  const trimmed = raw.trim()
+  const trimmed = stripToDueSegment(raw)
   if (!trimmed) return null
   if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
     const ms = Date.parse(trimmed)
     return Number.isNaN(ms) ? null : ms
   }
-  const isoDateOnly = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?))?$/i)
+  const isoDateOnly = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:[,\s]+(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?))?$/i)
   if (isoDateOnly) {
     const clock = parseClock(isoDateOnly[4] || '23:59')
     return buildHkEpoch(Number(isoDateOnly[1]), Number(isoDateOnly[2]), Number(isoDateOnly[3]), clock.hour, clock.minute)
+  }
+  const dmySlash = trimmed.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/)
+  if (dmySlash) {
+    const clock = parseClock(trimmed)
+    return buildHkEpoch(Number(dmySlash[3]), Number(dmySlash[2]), Number(dmySlash[1]), clock.hour, clock.minute)
   }
   const hkNow = hkYearMonthDay(now)
   const clock = parseClock(trimmed)
@@ -82,7 +104,7 @@ export function parseDueTimestamp(raw?: string, now = new Date()): number | null
     return buildHkEpoch(hkNow.year, hkNow.month, hkNow.day, clock.hour, clock.minute) + 86_400_000
   }
   // e.g. "Thursday, 17 September, 11:59 PM" or "22 September 2026, 11:59 PM"
-  const dayMonth = trimmed.match(/\b(\d{1,2})\s+([A-Za-z]+)(?:\s+(\d{4}))?\b/)
+  const dayMonth = trimmed.match(/\b(\d{1,2})\s+([A-Za-z]+)(?:[,\s]+(\d{4}))?\b/)
   if (dayMonth) {
     const day = Number(dayMonth[1])
     const month = MONTHS[dayMonth[2].toLowerCase()]
@@ -101,14 +123,19 @@ export function parseDueTimestamp(raw?: string, now = new Date()): number | null
     const month = MONTHS[monthDay[1].toLowerCase()]
     const day = Number(monthDay[2])
     if (month) {
-      const year = monthDay[3] ? Number(monthDay[3]) : hkNow.year
-      const candidate = buildHkEpoch(year, month, day, clock.hour, clock.minute)
+      let year = monthDay[3] ? Number(monthDay[3]) : hkNow.year
+      let candidate = buildHkEpoch(year, month, day, clock.hour, clock.minute)
+      if (!monthDay[3] && candidate < now.getTime() - 180 * 86_400_000) {
+        year += 1
+        candidate = buildHkEpoch(year, month, day, clock.hour, clock.minute)
+      }
       return Number.isNaN(candidate) ? null : candidate
     }
   }
-  const zhDate = trimmed.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/)
+  const zhDate = trimmed.match(/(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日/)
   if (zhDate) {
-    const candidate = buildHkEpoch(hkNow.year, Number(zhDate[1]), Number(zhDate[2]), clock.hour, clock.minute)
+    const year = zhDate[1] ? Number(zhDate[1]) : hkNow.year
+    const candidate = buildHkEpoch(year, Number(zhDate[2]), Number(zhDate[3]), clock.hour, clock.minute)
     return Number.isNaN(candidate) ? null : candidate
   }
   return null
@@ -126,16 +153,34 @@ export function sortAssignmentsByDue(items: LiveAssignment[], now = new Date()):
   })
 }
 
+export function formatSubmissionStatusLabel(status?: string, completed?: boolean): string {
+  const cleaned = status?.replace(/\s+/g, ' ').trim() || ''
+  if (cleaned) {
+    if (/submitted\s*for\s*grading/i.test(cleaned)) return '已提交评分 (Submitted for grading)'
+    if (/^submitted$/i.test(cleaned)) return '已提交 (Submitted)'
+    if (/^graded$/i.test(cleaned)) return '已评分 (Graded)'
+    if (/draft/i.test(cleaned)) return '草稿未正式提交 (Draft)'
+    if (/no\s*attempt|nothing\s*has\s*been\s*submitted|no\s*submission|not\s*submitted/i.test(cleaned)) return '尚未提交 (No submission)'
+    if (/^done\b/i.test(cleaned)) return '已完成 (Done)'
+    if (/^to\s*do\b/i.test(cleaned)) return '待完成 (To do)'
+    return cleaned
+  }
+  if (completed === true) return '已提交'
+  if (completed === false) return '未提交'
+  return '待确认提交状态'
+}
+
 export function formatDueBadge(due?: string, completed?: boolean, now = new Date()): { text: string; tone: 'urgent' | 'soon' | 'normal' | 'done' } {
   if (completed) return { text: '已完成', tone: 'done' }
+  const cleaned = cleanDueDisplay(due)
   const ms = parseDueTimestamp(due, now)
-  if (ms === null) return { text: due || '未提供截止时间', tone: 'normal' }
+  if (ms === null) return { text: cleaned, tone: 'normal' }
   const diffHours = (ms - now.getTime()) / 3_600_000
   if (diffHours < 0) return { text: '已过截止时间', tone: 'urgent' }
   if (diffHours <= 1) return { text: `${Math.max(1, Math.round(diffHours * 60))} 分钟内截止`, tone: 'urgent' }
   if (diffHours <= 24) return { text: `${Math.round(diffHours)} 小时后截止`, tone: 'urgent' }
   if (diffHours <= 72) return { text: `${Math.ceil(diffHours / 24)} 天内截止`, tone: 'soon' }
-  return { text: due || '', tone: 'normal' }
+  return { text: cleaned, tone: 'normal' }
 }
 
 export function getNotificationFeed(): AppNotificationItem[] {

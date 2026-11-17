@@ -71,7 +71,36 @@
     const index = cells.findIndex(cell => pattern.test(clean(cell.textContent)))
     return index < 0 ? null : row.cells[index]
   }
-  const submissionStatus = root => clean(tableField(root, /submission status|提交狀態|提交状态/i)?.textContent || root.querySelector('.submissionstatus, [data-region="submission-status"]')?.textContent, 160)
+  const submissionStatus = root => {
+    const cellText = clean(
+      tableField(root, /submission\s*status|status|提交狀態|提交状态/i)?.textContent ||
+      root.querySelector('.submissionstatus, .submissionstatussubmitted, .submissionstatusdraft, [data-region="submission-status"]')?.textContent,
+      160
+    )
+    if (cellText) return cellText
+    const badge = clean(
+      root.querySelector('[data-region="completion-info"] [data-toggletype], [data-region="completion-info"] .badge, .automatic-completion-conditions .badge, .activity-completion .badge')?.textContent,
+      120
+    )
+    if (/^(?:done|to\s*do|completed|incomplete)\b/i.test(badge)) return badge
+    return ''
+  }
+  const sanitizeDueString = rawText => {
+    const textValue = clean(rawText, 240)
+    if (!textValue) return undefined
+    const number = Number(textValue)
+    if (Number.isFinite(number) && number > 1000000000) {
+      return new Date(number < 100000000000 ? number * 1000 : number).toISOString()
+    }
+    const explicitDue = textValue.match(/(?:\b(?:due(?:\s+date)?|closes?|closing(?:\s+date)?|deadline)\b|截止(?:日期|时间|時間)?|到期(?:日期|时间|時間)?)\s*[:：]?\s*(.+?)(?=\s+(?:\b(?:opened|opens?|opening|time\s+remaining|grading\s+status|submission\s+status|last\s+modified)\b|开放|開放|剩余|剩餘)|$)/i)
+    if (explicitDue && clean(explicitDue[1], 120)) {
+      return clean(explicitDue[1], 120)
+    }
+    if (/^(?:opened|opens?|opening|开放|開放)\b/i.test(textValue) && !/(?:\b(?:due|closes?|deadline)\b|截止|到期)/i.test(textValue)) {
+      return undefined
+    }
+    return clean(textValue.replace(/^(?:due(?:\s+date)?|closes?|deadline|截止(?:日期|时间|時間)?|到期(?:日期|时间|時間)?)\s*[:：]?\s*/i, ''), 120) || undefined
+  }
   const parseGradeValue = rawText => {
     const raw = clean(rawText, 80)
     if (!raw) return null
@@ -101,27 +130,83 @@
     return null
   }
   const parseDue = (root) => {
-    const node = root.querySelector('time[datetime], [data-due-date], .duedate, .due-date, .event-time, time')
-    const raw = clean(node ? (node.getAttribute('datetime') || node.getAttribute('data-due-date') || node.textContent) : tableField(root, /due date|截止|到期/i)?.textContent, 120)
-    if (!raw) return undefined
-    const number = Number(raw)
-    if (Number.isFinite(number) && number > 1000000000) return new Date(number < 100000000000 ? number * 1000 : number).toISOString()
-    // Moodle overview omits the year and uses the site's timezone. Preserve
-    // its displayed date instead of Date.parse silently assigning year 2001.
-    return raw
+    const tableDue = clean(tableField(root, /due\s*date|close\s*date|closes|deadline|截止|到期/i)?.textContent, 160)
+    if (tableDue) {
+      const cleanedTableDue = sanitizeDueString(tableDue)
+      if (cleanedTableDue) return cleanedTableDue
+    }
+    const dateRegion = root.querySelector('[data-region="activity-dates"], .activity-dates, .description-inner')
+    if (dateRegion) {
+      for (const child of Array.from(dateRegion.querySelectorAll('div, span, li, p'))) {
+        const line = clean(child.textContent, 200)
+        if (/(?:\b(?:due|closes?|deadline)\b|截止|到期)/i.test(line)) {
+          const timeAttr = child.querySelector('time[datetime], [data-due-date]')
+          const fromAttr = sanitizeDueString(timeAttr?.getAttribute('datetime') || timeAttr?.getAttribute('data-due-date'))
+          if (fromAttr) return fromAttr
+          const parsedLine = sanitizeDueString(line)
+          if (parsedLine) return parsedLine
+        }
+      }
+      const regionDue = sanitizeDueString(dateRegion.textContent)
+      if (regionDue) return regionDue
+    }
+    const explicitNode = root.querySelector('[data-due-date], .duedate, .due-date')
+    if (explicitNode) {
+      const explicitDue = sanitizeDueString(explicitNode.getAttribute('data-due-date') || explicitNode.textContent)
+      if (explicitDue) return explicitDue
+    }
+    const timeNodes = Array.from(root.querySelectorAll('time[datetime], .event-time, time'))
+    for (const node of timeNodes) {
+      const parentText = clean(node.parentElement?.textContent, 200)
+      if (/^(?:opened|opens?|opening|开放|開放)\b/i.test(parentText) && !/(?:\b(?:due|closes?|deadline)\b|截止|到期)/i.test(parentText)) {
+        continue
+      }
+      const candidate = sanitizeDueString(node.getAttribute('datetime') || node.textContent)
+      if (candidate) return candidate
+    }
+    return sanitizeDueString(root.textContent && /(?:\b(?:due|closes?|deadline)\s*[:：])/i.test(root.textContent) ? root.textContent : '')
   }
   const completed = (root) => {
     const status = submissionStatus(root)
-    if (/no submission|not submitted|draft|未提交|尚未提交|草稿/i.test(status)) return false
-    if (/submitted for grading|submitted|已提交/i.test(status)) return true
-    if (status) return undefined
+    if (/no\s*submission|not\s*submitted|no\s*attempt|nothing\s*has\s*been\s*submitted|draft|overdue|to\s*do|incomplete|未提交|尚未提交|未尝试|未嘗試|草稿|待办|待辦|未完成/i.test(status)) return false
+    if (/submitted\s*for\s*grading|submitted|graded|complete|completed|done|已提交|已评分|已評分|已完成/i.test(status)) return true
     const state = attr(root, ['data-completionstate', 'data-completed', 'data-state'])
     if (/^(1|true|complete|completed|done|submitted)$/i.test(state)) return true
     if (/^(0|false|incomplete|pending|todo)$/i.test(state)) return false
-    const value = clean(root.textContent).toLowerCase()
-    if (/not completed|not submitted|no submission|incomplete|未完成|未提交|待完成/.test(value)) return false
-    if (/\bcompleted\b|\bsubmitted\b|已完成|已提交/.test(value)) return true
+    const completionNode = root.querySelector('[data-region="completion-info"], .automatic-completion-conditions, .activity-completion, button[data-action="toggle-manual-completion"]')
+    if (completionNode) {
+      const completionText = clean(
+        `${completionNode.textContent || ''} ${completionNode.getAttribute?.('aria-label') || ''} ${completionNode.getAttribute?.('title') || ''}`,
+        200
+      )
+      if (/\b(?:to\s*do|mark\s*as\s*done|not\s*completed|incomplete)\b|待办|待辦|标记为完成|標記為完成|未完成/i.test(completionText)) return false
+      if (/\b(?:done\s*:|completed|is\s*marked\s*as\s*done)\b|已完成/i.test(completionText)) return true
+    }
     return undefined
+  }
+  const mergeAssignmentItem = (existing, incoming) => {
+    if (!existing) return incoming
+    const pickDue = (a, b) => {
+      if (!a) return b
+      if (!b) return a
+      const hasYearA = /\b20\d{2}\b/.test(a)
+      const hasYearB = /\b20\d{2}\b/.test(b)
+      if (hasYearB && !hasYearA) return b
+      if (hasYearA && !hasYearB) return a
+      return b.length >= a.length ? b : a
+    }
+    const mergedDue = pickDue(existing.due, incoming.due)
+    const mergedStatus = incoming.submissionStatus || existing.submissionStatus
+    const mergedCompleted = incoming.completed !== undefined ? incoming.completed : existing.completed
+    const mergedCourse = (incoming.course && incoming.course !== '未提供课程') ? incoming.course : (existing.course || '未提供课程')
+    return {
+      id: existing.id || incoming.id,
+      title: incoming.title || existing.title,
+      course: mergedCourse,
+      ...(mergedDue ? { due: mergedDue } : {}),
+      ...(mergedStatus ? { submissionStatus: mergedStatus } : {}),
+      ...(mergedCompleted !== undefined ? { completed: mergedCompleted } : {}),
+    }
   }
 
   function extractMoodle() {
@@ -138,14 +223,17 @@
     })
 
     const assignments = []; const assignmentIds = new Set()
-    document.querySelectorAll('a[href*="/mod/assign/"], a[href*="assign/view"]').forEach((link) => {
+    const assessmentSelector = 'a[href*="/mod/assign/"], a[href*="assign/view"], a[href*="/mod/quiz/"], a[href*="/mod/turnitintooltwo/"]'
+    document.querySelectorAll(assessmentSelector).forEach((link) => {
+      const href = linkHref(link)
+      if (href && /\/(?:index|report|edit)\.php\b/i.test(href)) return
       const root = nearest(link); const title = clean(link.textContent) || text(root, ['.activityname', '.instancename', '.assignment-name', 'h3', 'h4'])
-      if (!title || assignmentIds.has(linkHref(link))) return
-      const href = linkHref(link); const id = idFrom(root, href, 'assignment', title)
+      if (!title || assignmentIds.has(href)) return
+      const id = idFrom(root, href, 'assignment', title)
       if (assignmentIds.has(id)) return
-      assignmentIds.add(id); const course = attr(root, ['data-course-name']) || text(root, ['.event-course', '.course-name', '.coursename']) || '未提供课程'
-      const done = completed(root); const due = parseDue(root)
-      assignments.push({ id, title, course, ...(due ? { due } : {}), ...(submissionStatus(root) ? { submissionStatus: submissionStatus(root) } : {}), ...(done === undefined ? {} : { completed: done }) })
+      assignmentIds.add(id); const course = attr(root, ['data-course-name']) || text(root, ['.event-course', '.course-name', '.coursename']) || clean(document.querySelector('h1, .page-header-headings')?.textContent) || '未提供课程'
+      const status = submissionStatus(root); const done = completed(root); const due = parseDue(root)
+      assignments.push({ id, title, course, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) })
     })
 
     const announcements = []; const announcementIds = new Set()
@@ -217,6 +305,46 @@
     await Promise.all(runners)
   }
 
+  function extractAssignDetailFields(doc) {
+    let due
+    let status = ''
+    let grade = null
+    for (const row of Array.from(doc.querySelectorAll('table.generaltable tr, .submissionstatustable tr, table tr'))) {
+      const cells = Array.from(row.querySelectorAll('th, td')).map(c => clean(c.textContent, 200))
+      if (cells.length < 2) continue
+      const label = cells[0].toLowerCase()
+      const value = cells[1]
+      if (/^(?:due\s*date|close\s*date|closes|cut-off\s*date|截止|到期)/i.test(label) && !due) {
+        due = sanitizeDueString(value)
+      } else if (/^(?:submission\s*status|attempt\s*status|提交狀態|提交状态)/i.test(label) && !status) {
+        status = value
+      } else if (/^(?:grading\s*status|评分状态|評分狀態)/i.test(label) && !status && /graded|已评分|已評分/i.test(value)) {
+        status = value
+      } else if (/^(?:grade|mark|score|成绩|成績|分数|分數)$/i.test(label) && !grade) {
+        grade = parseGradeValue(value)
+      }
+    }
+    if (!due) due = parseDue(doc.body || doc.documentElement)
+    let done
+    if (/no\s*submission|not\s*submitted|no\s*attempt|nothing\s*has\s*been\s*submitted|draft|overdue|to\s*do|incomplete|未提交|尚未提交|未尝试|未嘗試|草稿|待办|待辦|未完成/i.test(status)) {
+      done = false
+    } else if (/submitted\s*for\s*grading|submitted|graded|complete|completed|done|已提交|已评分|已評分|已完成/i.test(status)) {
+      done = true
+    } else {
+      done = completed(doc.body || doc.documentElement)
+    }
+    return { due, status: clean(status, 160), done, grade }
+  }
+
+  function mergeAssignmentLists(baseList, extraList) {
+    const map = new Map()
+    for (const item of [...(baseList || []), ...(extraList || [])]) {
+      if (!item || !item.id) continue
+      map.set(item.id, mergeAssignmentItem(map.get(item.id), item))
+    }
+    return Array.from(map.values())
+  }
+
   // Moodle's dashboard exposes course links, while resources and forum posts
   // live one level deeper. Read those rendered course pages through the
   // authenticated WebView session and return only normalized visible fields.
@@ -233,7 +361,7 @@
     if (!globalThis.__myhkuForceCrawl && cached && cached.key === cacheKey && Date.now() - cached.at < 60_000) {
       return {
         courses: baseData.courses,
-        assignments: Array.from(new Map([...baseData.assignments, ...cached.extra.assignments].map(item => [item.id, item])).values()),
+        assignments: mergeAssignmentLists(baseData.assignments, cached.extra.assignments),
         announcements: Array.from(new Map([...baseData.announcements, ...cached.extra.announcements].map(item => [item.id, item])).values()),
         resources: Array.from(new Map([...baseData.resources, ...cached.extra.resources].map(item => [item.id, item])).values()),
         grades: Array.from(new Map([...baseData.grades, ...cached.extra.grades].map(item => [item.id, item])).values()),
@@ -242,6 +370,15 @@
     }
     const extra = { assignments: [], announcements: [], resources: [], grades: [] }
     const seen = { assignments: new Set(), announcements: new Set(), resources: new Set(), grades: new Set() }
+    const upsertAssignment = (item) => {
+      const index = extra.assignments.findIndex(existing => existing.id === item.id)
+      if (index < 0) {
+        seen.assignments.add(item.id)
+        extra.assignments.push(item)
+      } else {
+        extra.assignments[index] = mergeAssignmentItem(extra.assignments[index], item)
+      }
+    }
     let failedCourses = 0
     await runBounded(unique, 4, async (courseUrl) => {
       try {
@@ -250,6 +387,7 @@
         const html = await response.text()
         const doc = new DOMParser().parseFromString(html, 'text/html')
         const heading = clean(doc.querySelector('h1, .page-header-headings, [data-region="header"]')?.textContent) || '未提供课程'
+        const pendingDetailLinks = []
         doc.querySelectorAll('a[href*="/mod/resource/"], a[href*="/mod/folder/"], a[href*="/mod/url/"], a[href*="/mod/page/"]').forEach(link => {
           const href = pageHref(link, courseUrl); const title = clean(link.textContent) || clean(link.getAttribute('aria-label'))
           if (!href || !title) return
@@ -257,13 +395,17 @@
           if (seen.resources.has(id)) return
           seen.resources.add(id); extra.resources.push({ id, title, course: heading, url: href })
         })
-        doc.querySelectorAll('a[href*="/mod/assign/"], a[href*="assign/view"]').forEach(link => {
-          const root = nearest(link); const href = pageHref(link, courseUrl); const title = clean(link.textContent) || text(root, ['.activityname', '.instancename', 'h3', 'h4'])
-          if (!href || !title) return
+        doc.querySelectorAll('a[href*="/mod/assign/"], a[href*="assign/view"], a[href*="/mod/quiz/"], a[href*="/mod/turnitintooltwo/"]').forEach(link => {
+          const href = pageHref(link, courseUrl)
+          if (!href || /\/(?:index|report|edit)\.php\b/i.test(href)) return
+          const root = nearest(link); const title = clean(link.textContent) || text(root, ['.activityname', '.instancename', 'h3', 'h4'])
+          if (!title) return
           const id = idFrom(root, href, 'assignment', `${heading}|${title}`)
-          if (seen.assignments.has(id)) return
-          seen.assignments.add(id); const due = parseDue(root); const done = completed(root)
-          extra.assignments.push({ id, title, course: heading, ...(due ? { due } : {}), ...(done === undefined ? {} : { completed: done }) })
+          const due = parseDue(root); const status = submissionStatus(root); const done = completed(root)
+          upsertAssignment({ id, title, course: heading, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) })
+          if (/\/mod\/assign\/view\.php\b/i.test(href) && (!due || !status || done === undefined)) {
+            pendingDetailLinks.push({ id, title, href })
+          }
         })
         doc.querySelectorAll('a[href*="/mod/forum/"]').forEach(link => {
           const root = nearest(link); const href = pageHref(link, courseUrl); const title = clean(link.textContent) || text(root, ['.discussionname', '.subject', 'h3', 'h4'])
@@ -287,24 +429,25 @@
           seen.grades.add(id)
           extra.grades.push({ id, title, course: heading, ...(parsed.value ? { value: parsed.value } : {}), released: parsed.released })
         })
-        // Moodle 5 puts due dates, submission states and grades in the course overview,
-        // not in the course's activity cards. Match rows by the activity URL id.
+        // Moodle 5 puts due dates, submission states and grades in the course overview
+        // or mod/assign/index.php, not in the course's activity cards. Match rows by the activity URL id.
         const courseId = new URL(courseUrl).searchParams.get('id')
-        const overviewUrl = new URL(`/course/overview.php?id=${encodeURIComponent(courseId)}`, courseUrl).href
-        try {
-          const overviewResponse = await fetch(overviewUrl, { credentials: 'include' })
-          if (overviewResponse.ok) {
+        const summaryUrls = [
+          new URL(`/course/overview.php?id=${encodeURIComponent(courseId)}`, courseUrl).href,
+          new URL(`/mod/assign/index.php?id=${encodeURIComponent(courseId)}`, courseUrl).href,
+        ]
+        for (const summaryUrl of summaryUrls) {
+          try {
+            const overviewResponse = await fetch(summaryUrl, { credentials: 'include' })
+            if (!overviewResponse.ok) continue
             const overview = new DOMParser().parseFromString(await overviewResponse.text(), 'text/html')
-            overview.querySelectorAll('a[href*="/mod/assign/view.php"]').forEach(link => {
-              const root = nearest(link); const href = pageHref(link, overviewUrl)
+            overview.querySelectorAll('a[href*="/mod/assign/view.php"], a[href*="/mod/quiz/view.php"], a[href*="/mod/turnitintooltwo/view.php"]').forEach(link => {
+              const root = nearest(link); const href = pageHref(link, summaryUrl)
               const title = clean(link.textContent)
               if (!href || !title) return
               const id = idFrom(root, href, 'assignment', title)
               const due = parseDue(root); const status = submissionStatus(root); const done = completed(root)
-              const item = { id, title, course: heading, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) }
-              const index = extra.assignments.findIndex(existing => existing.id === id)
-              if (index < 0) extra.assignments.push(item)
-              else extra.assignments[index] = item
+              upsertAssignment({ id, title, course: heading, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) })
               const parsedGrade = extractGradeFromRow(root)
               if (parsedGrade) {
                 const gradeId = `grade-${id}`
@@ -314,15 +457,43 @@
                 else extra.grades[gradeIdx] = gradeItem
               }
             })
-          }
-        } catch (_) { /* optional overview endpoint */ }
+          } catch (_) { /* optional summary endpoint */ }
+        }
+        // For assignments still missing due date or submission status, inspect up to 6 individual assign view pages.
+        const unresolved = pendingDetailLinks.filter(candidate => {
+          const currentItem = extra.assignments.find(item => item.id === candidate.id)
+          return !currentItem || !currentItem.due || !currentItem.submissionStatus || currentItem.completed === undefined
+        }).slice(0, 6)
+        await runBounded(unresolved, 3, async (candidate) => {
+          try {
+            const detailResp = await fetch(candidate.href, { credentials: 'include' })
+            if (!detailResp.ok) return
+            const detailDoc = new DOMParser().parseFromString(await detailResp.text(), 'text/html')
+            const detail = extractAssignDetailFields(detailDoc)
+            upsertAssignment({
+              id: candidate.id,
+              title: candidate.title,
+              course: heading,
+              ...(detail.due ? { due: detail.due } : {}),
+              ...(detail.status ? { submissionStatus: detail.status } : {}),
+              ...(detail.done !== undefined ? { completed: detail.done } : {}),
+            })
+            if (detail.grade) {
+              const gradeId = `grade-${candidate.id}`
+              const gradeItem = { id: gradeId, title: candidate.title, course: heading, ...(detail.grade.value ? { value: detail.grade.value } : {}), released: detail.grade.released }
+              const gradeIdx = extra.grades.findIndex(existing => existing.id === gradeId)
+              if (gradeIdx < 0) { seen.grades.add(gradeId); extra.grades.push(gradeItem) }
+              else extra.grades[gradeIdx] = gradeItem
+            }
+          } catch (_) { /* optional detail endpoint */ }
+        })
       } catch (_) { failedCourses += 1 }
     })
     const completeCrawl = unique.length > 0 && failedCourses === 0
     globalThis.__myhkuMoodleCrawlCache = { key: cacheKey, at: Date.now(), extra, completeCrawl }
     return {
       courses: baseData.courses,
-      assignments: Array.from(new Map([...baseData.assignments, ...extra.assignments].map(item => [item.id, item])).values()),
+      assignments: mergeAssignmentLists(baseData.assignments, extra.assignments),
       announcements: Array.from(new Map([...baseData.announcements, ...extra.announcements].map(item => [item.id, item])).values()),
       resources: Array.from(new Map([...baseData.resources, ...extra.resources].map(item => [item.id, item])).values()),
       grades: Array.from(new Map([...baseData.grades, ...extra.grades].map(item => [item.id, item])).values()),
@@ -725,6 +896,7 @@
         globalThis.MyHKU.ingest(JSON.stringify({
           version: 4,
           scheduleSchema: 2,
+          assignmentSchema: 2,
           site: host,
           siteKey: site,
           fetchedAt: new Date().toISOString(),

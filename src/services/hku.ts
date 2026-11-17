@@ -270,15 +270,19 @@ export async function fetchLiveSnapshot(signal?: AbortSignal): Promise<LiveSnaps
  * Contains no cookies, passwords, or access tokens.
  */
 const SNAPSHOT_SCHEDULE_SCHEMA = 2
+const SNAPSHOT_ASSIGNMENT_SCHEMA = 2
 
 export function getCachedSnapshot(): LiveSnapshot | null {
   try {
-    const parsed = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null') as (Partial<LiveSnapshot> & { scheduleSchema?: number }) | null
+    const parsed = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null') as (Partial<LiveSnapshot> & { scheduleSchema?: number; assignmentSchema?: number }) | null
     if (!parsed || typeof parsed.fetchedAt !== 'string') return null
     const validSchedule = parsed.scheduleSchema === SNAPSHOT_SCHEDULE_SCHEMA
-    const normalized = normalizeSnapshotPayload(
-      validSchedule ? parsed : { ...parsed, schedule: [], scheduleWeek: undefined, scheduleWeeks: undefined },
-    )
+    const validAssignments = parsed.assignmentSchema === SNAPSHOT_ASSIGNMENT_SCHEMA
+    const normalized = normalizeSnapshotPayload({
+      ...parsed,
+      ...(validSchedule ? {} : { schedule: [], scheduleWeek: undefined, scheduleWeeks: undefined }),
+      ...(validAssignments ? {} : { assignments: [] }),
+    })
     const hasAnyData =
       normalized.schedule.length > 0 ||
       Boolean(normalized.scheduleWeeks?.length) ||
@@ -294,7 +298,12 @@ export function getCachedSnapshot(): LiveSnapshot | null {
 }
 
 export function cacheSnapshot(snapshot: LiveSnapshot) {
-  try { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ ...snapshot, scheduleSchema: SNAPSHOT_SCHEDULE_SCHEMA })) } catch { /* ignore */ }
+  try {
+    localStorage.setItem(
+      SNAPSHOT_KEY,
+      JSON.stringify({ ...snapshot, scheduleSchema: SNAPSHOT_SCHEDULE_SCHEMA, assignmentSchema: SNAPSHOT_ASSIGNMENT_SCHEMA }),
+    )
+  } catch { /* ignore */ }
 }
 
 /** Notify only on changes and upcoming deadlines after the first successful baseline sync. */
