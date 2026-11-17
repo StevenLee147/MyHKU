@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { Bell, BookOpen, CalendarDays, Clock3, Download, ExternalLink, Link2, RefreshCw, ShieldCheck, Sparkles, Trophy } from 'lucide-react'
+import { Bell, BookOpen, CalendarDays, CalendarPlus, Clock3, Download, ExternalLink, Link2, Plus, RefreshCw, ShieldCheck, Sparkles, Trophy } from 'lucide-react'
+import { CATEGORY_LABELS, mergeWithCustomTasks, type CustomTask, type UnifiedAssignment } from '../services/customTasks'
 import { safeHkuUrl, type DataMode, type LiveSnapshot } from '../services/hku'
 import { formatDueBadge, sortAssignmentsByDue, type NavTarget } from '../services/notifications'
 import { todayClasses } from '../services/schedule'
@@ -8,6 +9,7 @@ export type ConnectionPhase = 'checking' | 'connected' | 'manual' | 'disconnecte
 
 export function OverviewPage({
   snapshot,
+  customTasks = [],
   dataMode,
   query,
   error,
@@ -16,8 +18,12 @@ export function OverviewPage({
   onNavigate,
   onSelectCourse,
   onRefresh,
+  onOpenAddTask,
+  onToggleCustomTask,
+  onExportIcs,
 }: {
   snapshot: LiveSnapshot | null
+  customTasks?: CustomTask[]
   dataMode: DataMode
   query: string
   error: string
@@ -26,6 +32,9 @@ export function OverviewPage({
   onNavigate: (target: NavTarget) => void
   onSelectCourse: (courseTitleOrId: string) => void
   onRefresh: () => void
+  onOpenAddTask?: () => void
+  onToggleCustomTask?: (id: string) => void
+  onExportIcs?: () => void
 }) {
   const keyword = query.trim().toLowerCase()
 
@@ -40,12 +49,13 @@ export function OverviewPage({
 
   const pendingAssignments = useMemo(() => {
     if (!snapshot) return []
-    const incomplete = snapshot.assignments.filter(item => !item.completed)
+    const combined = mergeWithCustomTasks(snapshot.assignments, customTasks)
+    const incomplete = combined.filter(item => !item.completed)
     const filtered = keyword
-      ? incomplete.filter(item => `${item.title} ${item.course}`.toLowerCase().includes(keyword))
+      ? incomplete.filter(item => `${item.title} ${item.course} ${item.note || ''}`.toLowerCase().includes(keyword))
       : incomplete
-    return sortAssignmentsByDue(filtered)
-  }, [snapshot, keyword])
+    return sortAssignmentsByDue(filtered) as UnifiedAssignment[]
+  }, [snapshot, customTasks, keyword])
 
   const recentAnnouncements = useMemo(() => {
     if (!snapshot) return []
@@ -172,12 +182,19 @@ export function OverviewPage({
         <section className="panel deadlines">
           <div className="panel-head">
             <div>
-              <h2>近期截止</h2>
-              <p>来自 Moodle 的待办事项</p>
+              <h2>近期截止与考试倒计时</h2>
+              <p>融合 Moodle 作业与个人自建日程</p>
             </div>
-            <button className="text-btn" onClick={() => onNavigate('moodle')}>
-              查看全部 <span>→</span>
-            </button>
+            <div className="head-inline-actions">
+              {onOpenAddTask && (
+                <button type="button" className="mini-action-btn" onClick={onOpenAddTask}>
+                  <Plus size={12} /> 新建倒计时
+                </button>
+              )}
+              <button className="text-btn" onClick={() => onNavigate('moodle')}>
+                查看全部 <span>→</span>
+              </button>
+            </div>
           </div>
           <div className="due-list">
             {dueTop.length ? (
@@ -188,12 +205,28 @@ export function OverviewPage({
                   <article
                     className="due-item clickable-row"
                     key={item.id}
-                    onClick={() => onSelectCourse(item.course)}
+                    onClick={() => {
+                      if (item.isCustom && onToggleCustomTask) onToggleCustomTask(item.id)
+                      else onSelectCourse(item.course)
+                    }}
                   >
-                    <span className={`due-check ${isUrgent ? 'urgent' : ''}`}>{isUrgent ? '!' : ''}</span>
+                    <span
+                      className={`due-check ${isUrgent ? 'urgent' : ''} ${item.isCustom ? 'custom-check' : ''}`}
+                      title={item.isCustom ? '点击标记完成' : undefined}
+                    >
+                      {isUrgent ? '!' : ''}
+                    </span>
                     <div>
-                      <h3>{item.title}</h3>
-                      <p>{item.course}</p>
+                      <h3>
+                        {item.title}
+                        {item.isCustom && item.category && (
+                          <em className={`task-tag tag-${item.category}`}>{CATEGORY_LABELS[item.category]}</em>
+                        )}
+                      </h3>
+                      <p>
+                        {item.course}
+                        {item.note ? ` · ${item.note}` : ''}
+                      </p>
                     </div>
                     <time className={isUrgent ? 'urgent-text' : ''}>{badge.text}</time>
                   </article>
@@ -204,7 +237,7 @@ export function OverviewPage({
             )}
           </div>
           <button className="all-tasks" onClick={() => onNavigate('moodle')}>
-            进入 Moodle 课程视图 <span>→</span>
+            进入 Moodle 与待办管理 <span>→</span>
           </button>
         </section>
       </div>
@@ -270,6 +303,13 @@ export function OverviewPage({
             <span>周课表视图</span>
             <small>{snapshot.schedule.length} 节记录</small>
           </button>
+          {onExportIcs && (
+            <button onClick={onExportIcs}>
+              <CalendarPlus size={17} />
+              <span>导出 .ics 日历</span>
+              <small>导入系统日历与提醒</small>
+            </button>
+          )}
         </div>
       </section>
     </>

@@ -20,12 +20,24 @@ import {
 import './styles.css'
 import { LegalGate } from './legal'
 import { AccountSetup } from './components/AccountSetup'
+import { CustomTaskModal } from './components/CustomTaskModal'
 import { CalendarPage } from './components/CalendarPage'
 import { MaterialsPage } from './components/MaterialsPage'
 import { MoodlePage } from './components/MoodlePage'
 import { OverviewPage, type ConnectionPhase } from './components/OverviewPage'
 import { SettingsPage } from './components/SettingsPage'
+import {
+  addCustomTask,
+  customTaskToUnified,
+  deleteCustomTask,
+  getCustomTasks,
+  toggleCustomTask,
+  updateCustomTask,
+  type CustomTask,
+  type CustomTaskCategory,
+} from './services/customTasks'
 import { buildDemoSnapshot } from './services/demoData'
+import { buildIcsCalendar, downloadIcsFile } from './services/icsExport'
 import {
   applyDesktopSessions,
   applyThemeMode,
@@ -88,6 +100,10 @@ function App() {
   const [connections, setConnections] = useState<Record<HkuSite, SiteConnection>>(() => getConnectionStates())
   const [liveSnapshot, setLiveSnapshot] = useState<LiveSnapshot | null>(() => getCachedSnapshot())
   const [liveError, setLiveError] = useState('')
+  const [customTasks, setCustomTasks] = useState<CustomTask[]>(() => getCustomTasks())
+  const [taskModalOpen, setTaskModalOpen] = useState(false)
+  const [editingTask, setEditingTask] = useState<CustomTask | null>(null)
+  const [defaultTaskCourse, setDefaultTaskCourse] = useState('')
 
   const searchInputRef = useRef<HTMLInputElement>(null)
   const started = useRef(false)
@@ -152,6 +168,7 @@ function App() {
         setLiveError('')
         setLastSync('尚未同步')
         setNotifFeed([])
+        setCustomTasks([])
       }
     })
     const load = async () => {
@@ -246,7 +263,7 @@ function App() {
           setConnections(states)
           setLiveSnapshot(snapshot)
           cacheSnapshot(snapshot)
-          notifySnapshotChanges(snapshot, handleNavigate)
+          notifySnapshotChanges(snapshot, handleNavigate, getCustomTasks().map(customTaskToUnified))
           setNotifFeed(getNotificationFeed())
           setLiveError('')
           finish(
@@ -311,6 +328,7 @@ function App() {
     setLiveError('')
     setLastSync('尚未同步')
     setNotifFeed([])
+    setCustomTasks([])
     if (window.myhkuDesktop?.accountStatus) {
       setAccount({})
       setAccountConfigured(false)
@@ -319,8 +337,61 @@ function App() {
     }
   }
 
+  const openAddTaskModal = useCallback((course = '') => {
+    setEditingTask(null)
+    setDefaultTaskCourse(course)
+    setTaskModalOpen(true)
+  }, [])
+
+  const openEditTaskModal = useCallback((task: CustomTask) => {
+    setEditingTask(task)
+    setDefaultTaskCourse('')
+    setTaskModalOpen(true)
+  }, [])
+
+  const handleSaveCustomTask = useCallback(
+    (input: { id?: string; title: string; course: string; category: CustomTaskCategory; due: string; note?: string }) => {
+      const next = input.id ? updateCustomTask(input.id, input) : addCustomTask(input)
+      setCustomTasks(next)
+      showToast(input.id ? '已更新自建事项' : '已添加自建倒计时事项')
+    },
+    [showToast],
+  )
+
+  const handleToggleCustomTask = useCallback(
+    (id: string) => {
+      const next = toggleCustomTask(id)
+      setCustomTasks(next)
+      const updated = next.find(item => item.id === id)
+      if (updated) showToast(updated.completed ? '已标记为完成' : '已恢复为待办', 2200)
+    },
+    [showToast],
+  )
+
+  const handleDeleteCustomTask = useCallback(
+    (id: string) => {
+      setCustomTasks(deleteCustomTask(id))
+      showToast('已删除自建事项', 2200)
+    },
+    [showToast],
+  )
+
   const demoSnapshot = useMemo(() => buildDemoSnapshot(), [])
   const activeSnapshot = dataMode === 'demo' ? demoSnapshot : liveSnapshot
+
+  const handleExportIcs = useCallback(() => {
+    if (!activeSnapshot) {
+      showToast('暂无可导出的课表或待办数据')
+      return
+    }
+    const { ics, classCount, ddlCount } = buildIcsCalendar(activeSnapshot, customTasks)
+    if (classCount === 0 && ddlCount === 0) {
+      showToast('当前没有包含有效日期的课表或待办可导出')
+      return
+    }
+    downloadIcsFile(ics, 'myhku-schedule-and-ddl.ics')
+    showToast(`已导出 ${classCount} 节课程与 ${ddlCount} 项待办到 .ics 日历文件`, 4000)
+  }, [activeSnapshot, customTasks, showToast])
 
   const title = navItems.find(n => n.key === active)?.label ?? '概览'
   const connectedCount = Object.values(connections).filter(item => item.state === 'connected').length
@@ -347,7 +418,7 @@ function App() {
     weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(now),
     date: new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', timeZone: 'Asia/Hong_Kong' }).format(now),
   }
-  const pendingCount = activeSnapshot ? activeSnapshot.assignments.filter(a => !a.completed).length : 0
+  const pendingCount = (activeSnapshot ? activeSnapshot.assignments.filter(a => !a.completed).length : 0) + customTasks.filter(t => !t.completed).length
   const unreadNotifCount = notifFeed.filter(n => !n.read).length
   const shortcutHint = isApplePlatform() ? '⌘ K' : 'Ctrl K'
 
@@ -605,6 +676,7 @@ function App() {
           {active === 'overview' && (
             <OverviewPage
               snapshot={activeSnapshot}
+              customTasks={customTasks}
               dataMode={dataMode}
               query={query}
               error={liveError}
@@ -613,6 +685,9 @@ function App() {
               onNavigate={target => handleNavigate(target)}
               onSelectCourse={course => handleNavigate('moodle', course)}
               onRefresh={() => sync()}
+              onOpenAddTask={() => openAddTaskModal()}
+              onToggleCustomTask={handleToggleCustomTask}
+              onExportIcs={handleExportIcs}
             />
           )}
 
@@ -620,12 +695,15 @@ function App() {
             (activeSnapshot ? (
               <CalendarPage
                 snapshot={activeSnapshot}
+                customTasks={customTasks}
                 dataMode={dataMode}
                 sisConnected={connections.sis.state === 'connected'}
                 query={query}
                 onRefresh={() => sync()}
                 onSyncSnapshot={() => sync(false)}
                 onNotice={msg => showToast(msg, 4000)}
+                onExportIcs={handleExportIcs}
+                onOpenAddTask={() => openAddTaskModal()}
               />
             ) : (
               <OverviewPage
@@ -645,11 +723,16 @@ function App() {
             (activeSnapshot ? (
               <MoodlePage
                 snapshot={activeSnapshot}
+                customTasks={customTasks}
                 query={query}
                 selectedCourseId={selectedCourseId}
                 onSelectCourse={setSelectedCourseId}
                 onOpenMaterials={() => handleNavigate('materials')}
                 onRefresh={() => sync()}
+                onOpenAddTask={openAddTaskModal}
+                onToggleCustomTask={handleToggleCustomTask}
+                onEditCustomTask={openEditTaskModal}
+                onDeleteCustomTask={handleDeleteCustomTask}
               />
             ) : (
               <OverviewPage
@@ -724,6 +807,18 @@ function App() {
           }}
         />
       )}
+
+      <CustomTaskModal
+        open={taskModalOpen}
+        editingTask={editingTask}
+        courses={activeSnapshot?.courses || []}
+        defaultCourse={defaultTaskCourse}
+        onClose={() => {
+          setTaskModalOpen(false)
+          setEditingTask(null)
+        }}
+        onSave={handleSaveCustomTask}
+      />
     </div>
   )
 }

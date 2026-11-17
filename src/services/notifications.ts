@@ -208,6 +208,7 @@ export function evaluateSnapshotNotifications(
   next: LiveSnapshot,
   onNavigate?: (target: NavTarget, course?: string) => void,
   now = new Date(),
+  extraAssignments: LiveAssignment[] = [],
 ): AppNotificationItem[] {
   let previous: Partial<LiveSnapshot> | null = null
   try { previous = JSON.parse(localStorage.getItem(BASELINE_KEY) || 'null') } catch { previous = null }
@@ -289,7 +290,7 @@ export function evaluateSnapshotNotifications(
 
   // Deadline reminders (24h and 1h) — suppressed on baseline establishment to avoid notification flood,
   // except we mark already-within-window baseline items as seen unless it's a subsequent check.
-  for (const item of next.assignments) {
+  for (const item of [...next.assignments, ...extraAssignments]) {
     if (item.completed) continue
     const dueMs = parseDueTimestamp(item.due, now)
     if (dueMs === null) continue

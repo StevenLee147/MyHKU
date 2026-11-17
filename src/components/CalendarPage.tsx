@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, Plus, RefreshCw } from 'lucide-react'
+import { CATEGORY_LABELS, mergeWithCustomTasks, type CustomTask, type UnifiedAssignment } from '../services/customTasks'
 import type { DataMode, LiveSnapshot } from '../services/hku'
+import { cleanDueDisplay, parseDueTimestamp, sortAssignmentsByDue } from '../services/notifications'
 import {
   baseWeekStartDate,
   calendarDaysBetween,
@@ -42,20 +44,26 @@ function scheduleDayIndex(item: LiveSnapshot['schedule'][number], weekStart: Dat
 
 export function CalendarPage({
   snapshot,
+  customTasks = [],
   dataMode = 'live',
   sisConnected = false,
   query,
   onRefresh,
   onSyncSnapshot,
   onNotice,
+  onExportIcs,
+  onOpenAddTask,
 }: {
   snapshot: LiveSnapshot
+  customTasks?: CustomTask[]
   dataMode?: DataMode
   sisConnected?: boolean
   query: string
   onRefresh: () => void
   onSyncSnapshot?: () => void
   onNotice: (message: string) => void
+  onExportIcs?: () => void
+  onOpenAddTask?: () => void
 }) {
   const [weekOffset, setWeekOffset] = useState(0)
   const [loadingWeek, setLoadingWeek] = useState<number | null>(null)
@@ -167,6 +175,19 @@ export function CalendarPage({
   const pixelsPerHour = 120
   const cachedWeeksCount = snapshot.scheduleWeeks?.length || (snapshot.scheduleWeek ? 1 : 0)
 
+  const weekDeadlines = useMemo(() => {
+    const startMs = Date.parse(`${weekStartIso}T00:00:00+08:00`)
+    const endMs = Date.parse(`${weekEndIso}T23:59:59+08:00`)
+    const keyword = query.trim().toLowerCase()
+    const combined = mergeWithCustomTasks(snapshot.assignments, customTasks).filter(item => !item.completed)
+    const inWeek = combined.filter(item => {
+      if (keyword && !`${item.title} ${item.course} ${item.note || ''}`.toLowerCase().includes(keyword)) return false
+      const ms = parseDueTimestamp(item.due)
+      return ms !== null && ms >= startMs && ms <= endMs
+    })
+    return sortAssignmentsByDue(inWeek) as UnifiedAssignment[]
+  }, [snapshot.assignments, customTasks, weekStartIso, weekEndIso, query])
+
   return (
     <section className="panel live-page">
       <div className="panel-head">
@@ -178,6 +199,16 @@ export function CalendarPage({
           </p>
         </div>
         <div className="calendar-actions">
+          {onOpenAddTask && (
+            <button type="button" className="text-btn" onClick={onOpenAddTask}>
+              <Plus size={13} /> 新建倒计时
+            </button>
+          )}
+          {onExportIcs && (
+            <button type="button" className="text-btn" onClick={onExportIcs}>
+              <CalendarPlus size={13} /> 导出 .ics
+            </button>
+          )}
           <button className="text-btn" onClick={() => void moveWeek(-1)} disabled={loadingWeek !== null}>
             <ChevronLeft size={13} /> 上周
           </button>
@@ -197,6 +228,21 @@ export function CalendarPage({
       )}
       {loadingWeek === null && (
         <>
+          {weekDeadlines.length > 0 && (
+            <div className="week-ddl-strip" role="region" aria-label="当周截止事项">
+              <span className="week-ddl-label">
+                <Clock3 size={13} /> 当周到期 ({weekDeadlines.length})
+              </span>
+              <div className="week-ddl-chips">
+                {weekDeadlines.map(item => (
+                  <span className={`week-ddl-chip ${item.category === 'exam' ? 'exam' : ''}`} key={item.id}>
+                    <strong>{item.course}</strong> · {item.title}
+                    {item.isCustom && item.category ? ` [${CATEGORY_LABELS[item.category]}]` : ''}（{cleanDueDisplay(item.due)}）
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="schedule-scroll">
             <div
               className="schedule-board"

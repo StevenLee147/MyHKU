@@ -310,15 +310,16 @@ export function cacheSnapshot(snapshot: LiveSnapshot) {
 export function notifySnapshotChanges(
   next: LiveSnapshot,
   onNavigate?: (target: NavTarget, course?: string) => void,
+  extraAssignments: LiveAssignment[] = [],
 ): number {
-  return evaluateSnapshotNotifications(next, onNavigate).length
+  return evaluateSnapshotNotifications(next, onNavigate, new Date(), extraAssignments).length
 }
 
 export function clearConnections() {
   for (const key of Object.keys(latestDesktopSessions) as HkuSite[]) {
     delete latestDesktopSessions[key]
   }
-  for (const key of [STATE_KEY, SNAPSHOT_KEY, LAST_SYNC_KEY, LAST_SYNC_MS_KEY]) {
+  for (const key of [STATE_KEY, SNAPSHOT_KEY, LAST_SYNC_KEY, LAST_SYNC_MS_KEY, 'myhku-custom-tasks']) {
     try { localStorage.removeItem(key) } catch { /* ignore */ }
   }
   clearNotificationState()

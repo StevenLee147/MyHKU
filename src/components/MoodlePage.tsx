@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { ArrowLeft, Bell, BookOpen, ChevronRight, Download, ExternalLink, FileText, RefreshCw, Trophy } from 'lucide-react'
+import { ArrowLeft, Bell, BookOpen, ChevronRight, Download, Edit3, ExternalLink, FileText, Plus, RefreshCw, Trash2, Trophy } from 'lucide-react'
+import { CATEGORY_LABELS, mergeWithCustomTasks, type CustomTask, type UnifiedAssignment } from '../services/customTasks'
 import { safeHkuUrl, type LiveCourse, type LiveSnapshot } from '../services/hku'
 import { cleanDueDisplay, formatDueBadge, formatSubmissionStatusLabel, sortAssignmentsByDue } from '../services/notifications'
 
@@ -23,39 +24,94 @@ function formatGradeDisplay(grade: LiveSnapshot['grades'][number]): string {
 
 export function MoodlePage({
   snapshot,
+  customTasks = [],
   query,
   selectedCourseId,
   onSelectCourse,
   onOpenMaterials,
   onRefresh,
+  onOpenAddTask,
+  onToggleCustomTask,
+  onEditCustomTask,
+  onDeleteCustomTask,
 }: {
   snapshot: LiveSnapshot
+  customTasks?: CustomTask[]
   query: string
   selectedCourseId: string | null
   onSelectCourse: (courseId: string | null) => void
   onOpenMaterials: () => void
   onRefresh: () => void
+  onOpenAddTask?: (defaultCourse?: string) => void
+  onToggleCustomTask?: (id: string) => void
+  onEditCustomTask?: (task: CustomTask) => void
+  onDeleteCustomTask?: (id: string) => void
 }) {
   const keyword = query.trim().toLowerCase()
+
+  const unifiedAll = useMemo(() => mergeWithCustomTasks(snapshot.assignments, customTasks), [snapshot.assignments, customTasks])
 
   const filtered = useMemo(() => {
     const match = (text: string) => !keyword || text.toLowerCase().includes(keyword)
     return {
       courses: snapshot.courses.filter(c => match(`${c.title} ${c.code || ''}`)),
-      assignments: sortAssignmentsByDue(snapshot.assignments.filter(a => match(`${a.title} ${a.course} ${a.submissionStatus || ''}`))),
+      assignments: sortAssignmentsByDue(unifiedAll.filter(a => match(`${a.title} ${a.course} ${a.submissionStatus || ''} ${a.note || ''}`))) as UnifiedAssignment[],
       grades: snapshot.grades.filter(g => match(`${g.title} ${g.course} ${g.value || ''}`)),
       announcements: snapshot.announcements.filter(n => match(`${n.title} ${n.course}`)),
       resources: snapshot.resources.filter(r => match(`${r.title} ${r.course}`)),
     }
-  }, [snapshot, keyword])
+  }, [snapshot, unifiedAll, keyword])
 
   const selectedCourse = useMemo(
     () => (selectedCourseId ? snapshot.courses.find(c => c.id === selectedCourseId || c.title === selectedCourseId) || null : null),
     [selectedCourseId, snapshot.courses],
   )
 
+  const renderTaskRow = (item: UnifiedAssignment, showCourseName: boolean) => {
+    const badge = formatDueBadge(item.due, item.completed)
+    const rawCustom = item.isCustom ? customTasks.find(t => t.id === item.id) : undefined
+    return (
+      <div className="live-row" key={item.id}>
+        <button
+          type="button"
+          className={`due-check due-check-btn ${item.completed ? 'done' : badge.tone === 'urgent' ? 'urgent' : ''}`}
+          disabled={!item.isCustom || !onToggleCustomTask}
+          aria-label={item.isCustom ? (item.completed ? '标记为未完成' : '标记为已完成') : '官方作业状态'}
+          onClick={() => item.isCustom && onToggleCustomTask?.(item.id)}
+        >
+          {item.completed ? '✓' : badge.tone === 'urgent' ? '!' : ''}
+        </button>
+        <span>
+          <strong>
+            {item.title}
+            {item.isCustom && item.category && (
+              <em className={`task-tag tag-${item.category}`}>{CATEGORY_LABELS[item.category]}</em>
+            )}
+          </strong>
+          {showCourseName && <small>{item.course}</small>}
+          <small>截止：{cleanDueDisplay(item.due)}（{badge.text}）</small>
+          <small>{item.isCustom ? (item.submissionStatus || '自建事项') : formatSubmissionStatusLabel(item.submissionStatus, item.completed)}</small>
+        </span>
+        {item.isCustom && (
+          <div className="task-row-actions">
+            {rawCustom && onEditCustomTask && (
+              <button type="button" className="icon-inline-btn" aria-label="编辑自建事项" onClick={() => onEditCustomTask(rawCustom)}>
+                <Edit3 size={12} />
+              </button>
+            )}
+            {onDeleteCustomTask && (
+              <button type="button" className="icon-inline-btn danger" aria-label="删除自建事项" onClick={() => onDeleteCustomTask(item.id)}>
+                <Trash2 size={12} />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   if (selectedCourse) {
-    const courseAssignments = sortAssignmentsByDue(snapshot.assignments.filter(item => matchesCourse(item.course, selectedCourse)))
+    const courseAssignments = sortAssignmentsByDue(unifiedAll.filter(item => matchesCourse(item.course, selectedCourse))) as UnifiedAssignment[]
     const courseAnnouncements = snapshot.announcements.filter(item => matchesCourse(item.course, selectedCourse))
     const courseGrades = snapshot.grades.filter(item => matchesCourse(item.course, selectedCourse))
     const courseResources = snapshot.resources.filter(item => matchesCourse(item.course, selectedCourse))
@@ -72,33 +128,26 @@ export function MoodlePage({
               {selectedCourse.code && !selectedCourse.title.includes(selectedCourse.code) ? ` · ${selectedCourse.code}` : ''}
             </h2>
             <p>
-              {courseAssignments.filter(a => !a.completed).length} 项待完成作业 · {courseResources.length} 项资料 · {courseGrades.length} 项成绩记录
+              {courseAssignments.filter(a => !a.completed).length} 项待完成事项 · {courseResources.length} 项资料 · {courseGrades.length} 项成绩记录
             </p>
           </div>
-          <button className="text-btn" onClick={onRefresh}>
-            <RefreshCw size={13} /> 刷新
-          </button>
+          <div className="head-inline-actions">
+            {onOpenAddTask && (
+              <button type="button" className="mini-action-btn" onClick={() => onOpenAddTask(selectedCourse.code || selectedCourse.title)}>
+                <Plus size={12} /> 添加本课倒计时
+              </button>
+            )}
+            <button className="text-btn" onClick={onRefresh}>
+              <RefreshCw size={13} /> 刷新
+            </button>
+          </div>
         </div>
 
         <div className="course-detail-grid">
           <div className="detail-section">
             <h3 className="subheading">作业与待办</h3>
             {courseAssignments.length ? (
-              courseAssignments.map(item => {
-                const badge = formatDueBadge(item.due, item.completed)
-                return (
-                  <div className="live-row" key={item.id}>
-                    <span className={`due-check ${item.completed ? 'done' : badge.tone === 'urgent' ? 'urgent' : ''}`}>
-                      {item.completed ? '✓' : badge.tone === 'urgent' ? '!' : ''}
-                    </span>
-                    <span>
-                      <strong>{item.title}</strong>
-                      <small>截止：{cleanDueDisplay(item.due)}（{badge.text}）</small>
-                      <small>{formatSubmissionStatusLabel(item.submissionStatus, item.completed)}</small>
-                    </span>
-                  </div>
-                )
-              })
+              courseAssignments.map(item => renderTaskRow(item, false))
             ) : (
               <p className="empty-state">该课程暂无作业记录</p>
             )}
@@ -221,24 +270,16 @@ export function MoodlePage({
           )}
         </div>
         <div>
-          <h3 className="subheading">待办</h3>
+          <div className="subheading-row">
+            <h3 className="subheading">待办与倒计时</h3>
+            {onOpenAddTask && (
+              <button type="button" className="text-btn" onClick={() => onOpenAddTask()}>
+                <Plus size={12} /> 新建
+              </button>
+            )}
+          </div>
           {filtered.assignments.length ? (
-            filtered.assignments.map(item => {
-              const badge = formatDueBadge(item.due, item.completed)
-              return (
-                <div className="live-row" key={item.id}>
-                  <span className={`due-check ${item.completed ? 'done' : badge.tone === 'urgent' ? 'urgent' : ''}`}>
-                    {item.completed ? '✓' : badge.tone === 'urgent' ? '!' : ''}
-                  </span>
-                  <span>
-                    {item.title}
-                    <small>{item.course}</small>
-                    <small>截止：{cleanDueDisplay(item.due)}</small>
-                    <small>{formatSubmissionStatusLabel(item.submissionStatus, item.completed)}</small>
-                  </span>
-                </div>
-              )
-            })
+            filtered.assignments.map(item => renderTaskRow(item, true))
           ) : (
             <p className="empty-state">暂无待办</p>
           )}

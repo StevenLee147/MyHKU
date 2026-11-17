@@ -320,3 +320,55 @@ test('bridge sanitizes Opened/Due strings, preserves richer assignment fields on
     await bridge.close()
   }
 })
+
+test('customTasks CRUD and buildIcsCalendar export valid Asia/Hong_Kong VEVENTs and VALARMs', async () => {
+  const storage = new Map()
+  globalThis.localStorage = {
+    getItem: key => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, val) => storage.set(key, String(val)),
+    removeItem: key => storage.delete(key),
+  }
+  try {
+    const { addCustomTask, updateCustomTask, toggleCustomTask, deleteCustomTask, getCustomTasks, mergeWithCustomTasks } = await loadTsModule('src/services/customTasks.ts')
+    const { buildIcsCalendar } = await loadTsModule('src/services/icsExport.ts')
+
+    addCustomTask({ title: 'Final Exam, Part A; Closed Book', course: 'GLIS1905', category: 'exam', due: '2026-12-10T09:30', note: 'Loke Yew Hall' })
+    addCustomTask({ title: 'Group Milestone', course: 'COMP7901', category: 'project', due: '2026-11-20 23:59' })
+    assert.equal(getCustomTasks().length, 2)
+
+    const examId = getCustomTasks().find(t => t.category === 'exam').id
+    updateCustomTask(examId, { note: 'CPD-LG.18' })
+    assert.equal(getCustomTasks().find(t => t.id === examId).note, 'CPD-LG.18')
+
+    const milestoneId = getCustomTasks().find(t => t.category === 'project').id
+    toggleCustomTask(milestoneId)
+    assert.equal(getCustomTasks().find(t => t.id === milestoneId).completed, true)
+
+    const merged = mergeWithCustomTasks([{ id: 'm1', title: 'Essay 1', course: 'CAES1001', due: '2026-11-25 23:59', completed: false }], getCustomTasks())
+    assert.equal(merged.length, 3)
+
+    const { ics, classCount, ddlCount } = buildIcsCalendar(
+      {
+        scheduleWeek: { start: '2026-11-15', end: '2026-11-21' },
+        schedule: [{ id: 'cls-1', title: 'GLIS1905 Seminar', code: 'GLIS1905', date: '2026-11-18', start: '09:00', end: '11:50', room: 'MB100' }],
+        assignments: [{ id: 'm1', title: 'Essay 1', course: 'CAES1001', due: '2026-11-25 23:59', completed: false }],
+      },
+      getCustomTasks(),
+      { now: new Date('2026-11-17T08:00:00Z') },
+    )
+    assert.equal(classCount, 1)
+    assert.equal(ddlCount, 2, 'completed custom milestone is excluded by default while incomplete Moodle + custom exam are exported')
+    assert.equal(ics.includes('TZID:Asia/Hong_Kong'), true)
+    assert.equal(ics.includes('DTSTART;TZID=Asia/Hong_Kong:20261118T090000'), true)
+    assert.equal(ics.includes('DTEND;TZID=Asia/Hong_Kong:20261210T093000'), true)
+    assert.equal(ics.includes('SUMMARY:[考试] GLIS1905：Final Exam\\, Part A\\; Closed Book'), true)
+    assert.equal(ics.includes('TRIGGER:-PT24H'), true)
+    assert.equal(ics.includes('@'), false, 'UIDs avoid @ to stay clean of email patterns')
+
+    deleteCustomTask(milestoneId)
+    assert.equal(getCustomTasks().length, 1)
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+// end v0.2.6 tests
