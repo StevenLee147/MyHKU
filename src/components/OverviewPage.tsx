@@ -2,12 +2,14 @@ import { useMemo } from 'react'
 import { Bell, BookOpen, CalendarDays, CalendarPlus, Clock3, Download, ExternalLink, Link2, Plus, RefreshCw, ShieldCheck, Sparkles, Trophy } from 'lucide-react'
 import { CATEGORY_LABELS, mergeWithCustomTasks, type CustomTask, type UnifiedAssignment } from '../services/customTasks'
 import { safeHkuUrl, type DataMode, type LiveSnapshot } from '../services/hku'
+import { tr, type Locale } from '../services/i18n'
 import { formatDueBadge, sortAssignmentsByDue, type NavTarget } from '../services/notifications'
 import { todayClasses } from '../services/schedule'
 
 export type ConnectionPhase = 'checking' | 'connected' | 'manual' | 'disconnected'
 
 export function OverviewPage({
+  locale = 'zh',
   snapshot,
   customTasks = [],
   dataMode,
@@ -22,6 +24,7 @@ export function OverviewPage({
   onToggleCustomTask,
   onExportIcs,
 }: {
+  locale?: Locale
   snapshot: LiveSnapshot | null
   customTasks?: CustomTask[]
   dataMode: DataMode
@@ -36,6 +39,7 @@ export function OverviewPage({
   onToggleCustomTask?: (id: string) => void
   onExportIcs?: () => void
 }) {
+  // locale enabled
   const keyword = query.trim().toLowerCase()
 
   const classesToday = useMemo(() => {
@@ -114,10 +118,10 @@ export function OverviewPage({
             <CalendarDays size={18} />
           </div>
           <div>
-            <small>今日课程</small>
-            <strong>{classesToday.length} 节</strong>
+            <small>{tr(locale, '今日课程', 'Classes Today')}</small>
+            <strong>{tr(locale, `${classesToday.length} 节`, `${classesToday.length}`)}</strong>
           </div>
-          <span className="stat-trend">{snapshot.schedule.length} 节已缓存</span>
+          <span className="stat-trend">{tr(locale, `${snapshot.schedule.length} 节已缓存`, `${snapshot.schedule.length} cached`)}</span>
         </div>
 
         <div className="stat-card" onClick={() => onNavigate('moodle')} role="button" tabIndex={0} onKeyDown={e => e.key === 'Enter' && onNavigate('moodle')}>
@@ -125,10 +129,10 @@ export function OverviewPage({
             <Clock3 size={18} />
           </div>
           <div>
-            <small>待完成</small>
-            <strong>{pendingAssignments.length} 项</strong>
+            <small>{tr(locale, '待完成', 'Pending Tasks')}</small>
+            <strong>{tr(locale, `${pendingAssignments.length} 项`, `${pendingAssignments.length}`)}</strong>
           </div>
-          {urgentCount > 0 && <span className="stat-trend amber-text">{urgentCount} 项临近截止</span>}
+          {urgentCount > 0 && <span className="stat-trend amber-text">{tr(locale, `${urgentCount} 项临近截止`, `${urgentCount} due soon`)}</span>}
         </div>
 
         <div className="stat-card" onClick={() => onNavigate('moodle')} role="button" tabIndex={0} onKeyDown={e => e.key === 'Enter' && onNavigate('moodle')}>
@@ -136,10 +140,10 @@ export function OverviewPage({
             <Trophy size={18} />
           </div>
           <div>
-            <small>{dataMode === 'demo' ? '示例已发布成绩' : '已获取成绩'}</small>
-            <strong>{releasedGradesCount} 项</strong>
+            <small>{dataMode === 'demo' ? tr(locale, '示例已发布成绩', 'Sample Grades') : tr(locale, '已获取成绩', 'Released Grades')}</small>
+            <strong>{tr(locale, `${releasedGradesCount} 项`, `${releasedGradesCount}`)}</strong>
           </div>
-          <span className="stat-trend green-text">{snapshot.courses.length} 门课程</span>
+          <span className="stat-trend green-text">{tr(locale, `${snapshot.courses.length} 门课程`, `${snapshot.courses.length} courses`)}</span>
         </div>
       </section>
 
@@ -147,13 +151,13 @@ export function OverviewPage({
         <section className="panel schedule">
           <div className="panel-head">
             <div>
-              <h2>今日课表</h2>
+              <h2>{tr(locale, '今日课表', "Today's Timetable")}</h2>
               <p>
                 {todayLabel.date}，{todayLabel.weekday} · Asia/Hong_Kong
               </p>
             </div>
             <button className="text-btn" onClick={() => onNavigate('calendar')}>
-              查看完整课表 <span>→</span>
+              {tr(locale, '查看完整课表', 'Full Timetable')} <span>→</span>
             </button>
           </div>
           <div className="class-list">
@@ -167,14 +171,14 @@ export function OverviewPage({
                   <div className="class-info">
                     <h3>{item.title}</h3>
                     <p>
-                      {item.code || '未提供课程代码'} <span>·</span> {item.teacher || '未提供教师'}
+                      {item.code || tr(locale, '未提供课程代码', 'No course code')} <span>·</span> {item.teacher || tr(locale, '未提供教师', 'No instructor')}
                     </p>
                   </div>
-                  <div className="room">{item.room || '未提供地点'}</div>
+                  <div className="room">{item.room || tr(locale, '未提供地点', 'TBA')}</div>
                 </article>
               ))
             ) : (
-              <p className="empty-state">{keyword ? '今日没有匹配搜索条件的课程' : '今天没有课表记录'}</p>
+              <p className="empty-state">{keyword ? tr(locale, '今日没有匹配搜索条件的课程', 'No matching classes today') : tr(locale, '今天没有课表记录', 'No classes scheduled today')}</p>
             )}
           </div>
         </section>
@@ -182,17 +186,17 @@ export function OverviewPage({
         <section className="panel deadlines">
           <div className="panel-head">
             <div>
-              <h2>近期截止与考试倒计时</h2>
-              <p>融合 Moodle 作业与个人自建日程</p>
+              <h2>{tr(locale, '近期截止与考试倒计时', 'Upcoming Deadlines & Countdowns')}</h2>
+              <p>{tr(locale, '融合 Moodle 作业与个人自建日程', 'Moodle assignments merged with personal countdowns')}</p>
             </div>
             <div className="head-inline-actions">
               {onOpenAddTask && (
                 <button type="button" className="mini-action-btn" onClick={onOpenAddTask}>
-                  <Plus size={12} /> 新建倒计时
+                  <Plus size={12} /> {tr(locale, '新建倒计时', 'Add Task')}
                 </button>
               )}
               <button className="text-btn" onClick={() => onNavigate('moodle')}>
-                查看全部 <span>→</span>
+                {tr(locale, '查看全部', 'All')} <span>→</span>
               </button>
             </div>
           </div>
@@ -212,7 +216,7 @@ export function OverviewPage({
                   >
                     <span
                       className={`due-check ${isUrgent ? 'urgent' : ''} ${item.isCustom ? 'custom-check' : ''}`}
-                      title={item.isCustom ? '点击标记完成' : undefined}
+                      title={item.isCustom ? tr(locale, '点击标记完成', 'Click to toggle done') : undefined}
                     >
                       {isUrgent ? '!' : ''}
                     </span>
@@ -233,11 +237,11 @@ export function OverviewPage({
                 )
               })
             ) : (
-              <p className="empty-state">{keyword ? '没有匹配搜索条件的待办事项' : '暂无未完成待办'}</p>
+              <p className="empty-state">{keyword ? tr(locale, '没有匹配搜索条件的待办事项', 'No matching tasks') : tr(locale, '暂无未完成待办', 'All caught up!')}</p>
             )}
           </div>
           <button className="all-tasks" onClick={() => onNavigate('moodle')}>
-            进入 Moodle 与待办管理 <span>→</span>
+            {tr(locale, '进入 Moodle 与待办管理', 'Open Moodle & GPA View')} <span>→</span>
           </button>
         </section>
       </div>
@@ -246,11 +250,11 @@ export function OverviewPage({
         <section className="panel overview-announcements">
           <div className="panel-head">
             <div>
-              <h2>最新公告</h2>
-              <p>来自课程论坛与通知</p>
+              <h2>{tr(locale, '最新公告', 'Recent Announcements')}</h2>
+              <p>{tr(locale, '来自课程论坛与通知', 'From Moodle course forums')}</p>
             </div>
             <button className="text-btn" onClick={() => onNavigate('moodle')}>
-              全部公告 <span>→</span>
+              {tr(locale, '全部公告', 'All')} <span>→</span>
             </button>
           </div>
           <div className="due-list">
@@ -283,31 +287,31 @@ export function OverviewPage({
         <div className="quick-title">
           <Sparkles size={18} />
           <div>
-            <h2>学习快捷入口</h2>
-            <p>按模块快速浏览课程与资料</p>
+            <h2>{tr(locale, '学习快捷入口', 'Quick Shortcuts')}</h2>
+            <p>{tr(locale, '按模块快速浏览课程与资料', 'Jump to courses, materials, or calendar')}</p>
           </div>
         </div>
         <div className="quick-actions">
           <button onClick={() => onNavigate('moodle')}>
             <BookOpen size={17} />
-            <span>Moodle 课程</span>
-            <small>{snapshot.courses.length} 门课程</small>
+            <span>{tr(locale, 'Moodle 课程', 'Moodle & GPA')}</span>
+            <small>{tr(locale, `${snapshot.courses.length} 门课程`, `${snapshot.courses.length} courses`)}</small>
           </button>
           <button onClick={() => onNavigate('materials')}>
             <Download size={17} />
-            <span>课程资料</span>
-            <small>{snapshot.resources.length} 份文件</small>
+            <span>{tr(locale, '课程资料', 'Materials')}</span>
+            <small>{tr(locale, `${snapshot.resources.length} 份文件`, `${snapshot.resources.length} files`)}</small>
           </button>
           <button onClick={() => onNavigate('calendar')}>
             <CalendarDays size={17} />
-            <span>周课表视图</span>
-            <small>{snapshot.schedule.length} 节记录</small>
+            <span>{tr(locale, '周课表视图', 'Weekly Timetable')}</span>
+            <small>{tr(locale, `${snapshot.schedule.length} 节记录`, `${snapshot.schedule.length} sessions`)}</small>
           </button>
           {onExportIcs && (
             <button onClick={onExportIcs}>
               <CalendarPlus size={17} />
-              <span>导出 .ics 日历</span>
-              <small>导入系统日历与提醒</small>
+              <span>{tr(locale, '导出 .ics 日历', 'Export .ics Calendar')}</span>
+              <small>{tr(locale, '导入系统日历与提醒', 'Import to Apple/Google/Outlook')}</small>
             </button>
           )}
         </div>
@@ -315,3 +319,4 @@ export function OverviewPage({
     </>
   )
 }
+// end OverviewPage

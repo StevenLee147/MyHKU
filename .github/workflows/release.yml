@@ -75,6 +75,7 @@ jobs:
             release/desktop/*.blockmap
             release/desktop/latest*.yml
             release/desktop/alpha*.yml
+            release/desktop/beta*.yml
           if-no-files-found: error
 
   android:

@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   FileText,
+  Globe,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -60,12 +61,20 @@ import {
   type ThemeMode,
 } from './services/hku'
 import {
+  applyDocumentLocale,
+  getLocale,
+  localizedGreeting,
+  NAV_LABELS,
+  setLocale as persistLocale,
+  tr,
+  type Locale,
+} from './services/i18n'
+import {
   getNotificationFeed,
   markAllNotificationsRead,
   type AppNotificationItem,
   type NavTarget,
 } from './services/notifications'
-import { hongKongGreeting } from './services/schedule'
 
 const navItems: { key: NavTarget; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'overview', label: '概览', icon: LayoutDashboard },
@@ -97,6 +106,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [dataMode, setDataModeState] = useState<DataMode>(() => getDataMode())
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode())
+  const [locale, setLocaleState] = useState<Locale>(() => getLocale())
   const [connections, setConnections] = useState<Record<HkuSite, SiteConnection>>(() => getConnectionStates())
   const [liveSnapshot, setLiveSnapshot] = useState<LiveSnapshot | null>(() => getCachedSnapshot())
   const [liveError, setLiveError] = useState('')
@@ -117,6 +127,10 @@ function App() {
   useEffect(() => {
     applyThemeMode(themeMode)
   }, [themeMode])
+
+  useEffect(() => {
+    applyDocumentLocale(locale)
+  }, [locale])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -141,6 +155,15 @@ function App() {
       }, duration)
     }
   }, [])
+
+  const handleSetLocale = useCallback(
+    (next: Locale) => {
+      persistLocale(next)
+      setLocaleState(next)
+      showToast(next === 'en' ? 'Switched to English' : '已切换为简体中文', 2000)
+    },
+    [showToast],
+  )
 
   const handleNavigate = useCallback((target: NavTarget, course?: string) => {
     setActive(target)
@@ -393,7 +416,7 @@ function App() {
     showToast(`已导出 ${classCount} 节课程与 ${ddlCount} 项待办到 .ics 日历文件`, 4000)
   }, [activeSnapshot, customTasks, showToast])
 
-  const title = navItems.find(n => n.key === active)?.label ?? '概览'
+  const title = NAV_LABELS[locale][active] ?? tr(locale, '概览', 'Overview')
   const connectedCount = Object.values(connections).filter(item => item.state === 'connected').length
   const manualConnection = Object.values(connections).find(item => item.state === 'login_pending')
   const connectionPhase: ConnectionPhase = Object.values(connections).some(item => item.state === 'login_pending')
@@ -405,19 +428,21 @@ function App() {
         : 'disconnected'
   const accountLabel =
     dataMode === 'demo'
-      ? '演示数据模式'
+      ? tr(locale, '演示数据模式', 'Demo Mode')
       : connectedCount === 3
-        ? '已安全连接'
+        ? tr(locale, '已安全连接', 'Connected')
         : connectedCount
-          ? `${connectedCount}/3 个服务已连接`
-          : '需要连接 HKU'
+          ? tr(locale, `${connectedCount}/3 个服务已连接`, `${connectedCount}/3 Connected`)
+          : tr(locale, '需要连接 HKU', 'Connect HKU')
 
   const now = new Date()
-  const greeting = hongKongGreeting(now)
+  const greeting = localizedGreeting(locale, now)
+  const dateFmtLocale = locale === 'en' ? 'en-US' : 'zh-CN'
   const today = {
-    weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(now),
-    date: new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', timeZone: 'Asia/Hong_Kong' }).format(now),
+    weekday: new Intl.DateTimeFormat(dateFmtLocale, { weekday: 'long', timeZone: 'Asia/Hong_Kong' }).format(now),
+    date: new Intl.DateTimeFormat(dateFmtLocale, { month: 'long', day: 'numeric', timeZone: 'Asia/Hong_Kong' }).format(now),
   }
+  // today ready
   const pendingCount = (activeSnapshot ? activeSnapshot.assignments.filter(a => !a.completed).length : 0) + customTasks.filter(t => !t.completed).length
   const unreadNotifCount = notifFeed.filter(n => !n.read).length
   const shortcutHint = isApplePlatform() ? '⌘ K' : 'Ctrl K'
@@ -456,20 +481,20 @@ function App() {
         </div>
 
         <div className="workspace">
-          <span className="workspace-label">当前数据源</span>
-          <strong>{dataMode === 'demo' ? '演示学习空间' : 'HKU 实时学习空间'}</strong>
+          <span className="workspace-label">{tr(locale, '当前数据源', 'Workspace')}</span>
+          <strong>{dataMode === 'demo' ? tr(locale, '演示学习空间', 'Demo Workspace') : tr(locale, 'HKU 实时学习空间', 'HKU Live Space')}</strong>
         </div>
 
         <nav>
-          {navItems.map(({ key, label, icon: Icon }) => (
+          {navItems.map(({ key, icon: Icon }) => (
             <button
               key={key}
               className={active === key ? 'active' : ''}
               onClick={() => handleNavigate(key)}
             >
               <Icon size={18} />
-              <span>{label}</span>
-              {key === 'moodle' && pendingCount > 0 && <i className="nav-dot" title={`${pendingCount} 项待办`} />}
+              <span>{NAV_LABELS[locale][key]}</span>
+              {key === 'moodle' && pendingCount > 0 && <i className="nav-dot" title={`${pendingCount}`} />}
             </button>
           ))}
         </nav>
@@ -509,7 +534,7 @@ function App() {
             <Menu size={21} />
           </button>
           <div className="crumb">
-            <span>学习空间</span>
+            <span>{tr(locale, '学习空间', 'Workspace')}</span>
             <b>/</b>
             <strong>{title}</strong>
           </div>
@@ -520,16 +545,26 @@ function App() {
                 ref={searchInputRef}
                 value={query}
                 onChange={e => setQuery(e.target.value)}
-                placeholder="搜索课程、课表、作业、资料…"
+                placeholder={tr(locale, '搜索课程、课表、作业、资料…', 'Search courses, timetable, tasks, files…')}
               />
               {query ? (
-                <button type="button" className="clear-search-btn" onClick={() => setQuery('')} aria-label="清除搜索">
+                <button type="button" className="clear-search-btn" onClick={() => setQuery('')} aria-label="Clear search">
                   <X size={13} />
                 </button>
               ) : (
                 <kbd>{shortcutHint}</kbd>
               )}
             </label>
+
+            <button
+              type="button"
+              className="lang-toggle-btn"
+              aria-label={tr(locale, '切换为英文', 'Switch to Chinese')}
+              onClick={() => handleSetLocale(locale === 'zh' ? 'en' : 'zh')}
+            >
+              <Globe size={15} />
+              <span>{locale === 'zh' ? 'EN' : '中文'}</span>
+            </button>
 
             <div className="popover-anchor">
               <button
@@ -646,15 +681,17 @@ function App() {
                 {today.weekday} · {today.date}
               </p>
               <h1>
-                {greeting}，{account.username || '同学'} <span>✦</span>
+                {greeting}{locale === 'en' ? ', ' : '，'}{account.username || tr(locale, '同学', 'Student')} <span>✦</span>
               </h1>
               <p className="subtitle">
-                {dataMode === 'demo' ? '当前展示隔离演示数据；可在设置中切换至真实模式。' : '这是你最新的 HKU 学习空间概览。'}
+                {dataMode === 'demo'
+                  ? tr(locale, '当前展示隔离演示数据；可在设置中切换至真实模式。', 'Showing isolated sample data; switch to Live mode in Settings.')
+                  : tr(locale, '这是你最新的 HKU 学习空间概览。', 'Here is your latest HKU learning dashboard.')}
               </p>
             </div>
             <button className="refresh-btn" onClick={() => sync()} disabled={refreshing}>
               <RefreshCw size={16} className={refreshing ? 'spin' : ''} />
-              {refreshing ? '同步中…' : '立即刷新'}
+              {refreshing ? tr(locale, '同步中…', 'Syncing…') : tr(locale, '立即刷新', 'Sync Now')}
             </button>
           </div>
 
@@ -662,19 +699,20 @@ function App() {
             <span>
               <CheckCircle2 size={14} />{' '}
               {dataMode === 'demo'
-                ? '演示样例就绪'
+                ? tr(locale, '演示样例就绪', 'Demo Ready')
                 : !liveSnapshot
-                  ? '等待自动同步'
+                  ? tr(locale, '等待自动同步', 'Awaiting Sync')
                   : liveError
-                    ? '显示本地缓存'
-                    : '数据已同步'}
+                    ? tr(locale, '显示本地缓存', 'Showing Local Cache')
+                    : tr(locale, '数据已同步', 'Synced')}
             </span>
-            <span>上次更新 {dataMode === 'demo' ? '内置示例' : lastSync}</span>
-            <span className="sync-policy">打开应用时刷新 · 每日自动更新一次</span>
+            <span>{tr(locale, '上次更新', 'Last sync')} {dataMode === 'demo' ? tr(locale, '内置示例', 'Sample') : lastSync}</span>
+            <span className="sync-policy">{tr(locale, '打开应用时刷新 · 每日自动更新一次', 'Syncs on launch · Daily auto-refresh')}</span>
           </div>
 
           {active === 'overview' && (
             <OverviewPage
+              locale={locale}
               snapshot={activeSnapshot}
               customTasks={customTasks}
               dataMode={dataMode}
@@ -694,6 +732,7 @@ function App() {
           {active === 'calendar' &&
             (activeSnapshot ? (
               <CalendarPage
+                locale={locale}
                 snapshot={activeSnapshot}
                 customTasks={customTasks}
                 dataMode={dataMode}
@@ -707,6 +746,7 @@ function App() {
               />
             ) : (
               <OverviewPage
+                locale={locale}
                 snapshot={null}
                 dataMode={dataMode}
                 query={query}
@@ -722,6 +762,7 @@ function App() {
           {active === 'moodle' &&
             (activeSnapshot ? (
               <MoodlePage
+                locale={locale}
                 snapshot={activeSnapshot}
                 customTasks={customTasks}
                 query={query}
@@ -736,6 +777,7 @@ function App() {
               />
             ) : (
               <OverviewPage
+                locale={locale}
                 snapshot={null}
                 dataMode={dataMode}
                 query={query}
@@ -751,6 +793,7 @@ function App() {
           {active === 'materials' &&
             (activeSnapshot ? (
               <MaterialsPage
+                locale={locale}
                 snapshot={activeSnapshot}
                 dataMode={dataMode}
                 query={query}
@@ -758,6 +801,7 @@ function App() {
               />
             ) : (
               <OverviewPage
+                locale={locale}
                 snapshot={null}
                 dataMode={dataMode}
                 query={query}
@@ -772,6 +816,8 @@ function App() {
 
           {active === 'settings' && (
             <SettingsPage
+              locale={locale}
+              setLocale={handleSetLocale}
               mode={dataMode}
               setMode={mode => {
                 setDataMode(mode)

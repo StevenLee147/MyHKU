@@ -1,8 +1,11 @@
-import { useMemo } from 'react'
-import { ArrowLeft, Bell, BookOpen, ChevronRight, Download, Edit3, ExternalLink, FileText, Plus, RefreshCw, Trash2, Trophy } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { ArrowLeft, Bell, BookOpen, Calculator, ChevronRight, Download, Edit3, ExternalLink, FileText, Plus, RefreshCw, Trash2, Trophy } from 'lucide-react'
 import { CATEGORY_LABELS, mergeWithCustomTasks, type CustomTask, type UnifiedAssignment } from '../services/customTasks'
 import { safeHkuUrl, type LiveCourse, type LiveSnapshot } from '../services/hku'
+import { tr, type Locale } from '../services/i18n'
 import { cleanDueDisplay, formatDueBadge, formatSubmissionStatusLabel, sortAssignmentsByDue } from '../services/notifications'
+import { GpaSimulatorPanel } from './GpaSimulatorPanel'
+// imports updated
 
 function matchesCourse(itemCourse: string, target: LiveCourse): boolean {
   const normalizedItem = itemCourse.trim().toLowerCase()
@@ -16,13 +19,14 @@ function matchesCourse(itemCourse: string, target: LiveCourse): boolean {
   return false
 }
 
-function formatGradeDisplay(grade: LiveSnapshot['grades'][number]): string {
-  if (grade.released === false) return '未发布'
+function formatGradeDisplay(grade: LiveSnapshot['grades'][number], locale: Locale): string {
+  if (grade.released === false) return tr(locale, '未发布', 'Unreleased')
   if (grade.value !== undefined && grade.value.trim() !== '') return grade.value
-  return '未获取'
+  return tr(locale, '未获取', 'Unavailable')
 }
 
 export function MoodlePage({
+  locale = 'zh',
   snapshot,
   customTasks = [],
   query,
@@ -35,6 +39,7 @@ export function MoodlePage({
   onEditCustomTask,
   onDeleteCustomTask,
 }: {
+  locale?: Locale
   snapshot: LiveSnapshot
   customTasks?: CustomTask[]
   query: string
@@ -47,7 +52,9 @@ export function MoodlePage({
   onEditCustomTask?: (task: CustomTask) => void
   onDeleteCustomTask?: (id: string) => void
 }) {
+  const [showGpa, setShowGpa] = useState(true)
   const keyword = query.trim().toLowerCase()
+  // state ready
 
   const unifiedAll = useMemo(() => mergeWithCustomTasks(snapshot.assignments, customTasks), [snapshot.assignments, customTasks])
 
@@ -121,40 +128,51 @@ export function MoodlePage({
         <div className="panel-head">
           <div>
             <button type="button" className="back-inline-btn" onClick={() => onSelectCourse(null)}>
-              <ArrowLeft size={14} /> 返回全部 Moodle 课程
+              <ArrowLeft size={14} /> {tr(locale, '返回全部 Moodle 课程', 'Back to All Courses')}
             </button>
             <h2>
               {selectedCourse.title}
               {selectedCourse.code && !selectedCourse.title.includes(selectedCourse.code) ? ` · ${selectedCourse.code}` : ''}
             </h2>
             <p>
-              {courseAssignments.filter(a => !a.completed).length} 项待完成事项 · {courseResources.length} 项资料 · {courseGrades.length} 项成绩记录
+              {tr(
+                locale,
+                `${courseAssignments.filter(a => !a.completed).length} 项待完成事项 · ${courseResources.length} 项资料 · ${courseGrades.length} 项成绩记录`,
+                `${courseAssignments.filter(a => !a.completed).length} pending · ${courseResources.length} materials · ${courseGrades.length} grades`,
+              )}
             </p>
           </div>
           <div className="head-inline-actions">
             {onOpenAddTask && (
               <button type="button" className="mini-action-btn" onClick={() => onOpenAddTask(selectedCourse.code || selectedCourse.title)}>
-                <Plus size={12} /> 添加本课倒计时
+                <Plus size={12} /> {tr(locale, '添加本课倒计时', 'Add Task')}
               </button>
             )}
             <button className="text-btn" onClick={onRefresh}>
-              <RefreshCw size={13} /> 刷新
+              <RefreshCw size={13} /> {tr(locale, '刷新', 'Refresh')}
             </button>
           </div>
         </div>
 
+        <GpaSimulatorPanel
+          locale={locale}
+          courses={snapshot.courses}
+          selectedCourse={selectedCourse}
+          courseGrades={courseGrades}
+        />
+
         <div className="course-detail-grid">
           <div className="detail-section">
-            <h3 className="subheading">作业与待办</h3>
+            <h3 className="subheading">{tr(locale, '作业与待办', 'Assignments & Tasks')}</h3>
             {courseAssignments.length ? (
               courseAssignments.map(item => renderTaskRow(item, false))
             ) : (
-              <p className="empty-state">该课程暂无作业记录</p>
+              <p className="empty-state">{tr(locale, '该课程暂无作业记录', 'No assignments recorded')}</p>
             )}
           </div>
 
           <div className="detail-section">
-            <h3 className="subheading">课程成绩</h3>
+            <h3 className="subheading">{tr(locale, '课程成绩', 'Course Grades')}</h3>
             {courseGrades.length ? (
               courseGrades.map(item => (
                 <div className="live-row" key={item.id}>
@@ -162,22 +180,22 @@ export function MoodlePage({
                   <span>
                     <strong>{item.title}</strong>
                     <small className={item.released === false ? 'muted-tag' : 'grade-value-tag'}>
-                      {formatGradeDisplay(item)}
+                      {formatGradeDisplay(item, locale)}
                     </small>
                   </span>
                 </div>
               ))
             ) : (
-              <p className="empty-state">该课程暂无可见成绩</p>
+              <p className="empty-state">{tr(locale, '该课程暂无可见成绩', 'No released grades yet')}</p>
             )}
           </div>
 
           <div className="detail-section">
             <div className="subheading-row">
-              <h3 className="subheading">课程资料</h3>
+              <h3 className="subheading">{tr(locale, '课程资料', 'Course Materials')}</h3>
               {courseResources.length > 0 && (
                 <button type="button" className="text-btn" onClick={onOpenMaterials}>
-                  前往下载页 →
+                  {tr(locale, '前往下载页 →', 'Materials →')}
                 </button>
               )}
             </div>
@@ -192,19 +210,19 @@ export function MoodlePage({
                     </span>
                     {safe && (
                       <button type="button" className="mini-action-btn" onClick={onOpenMaterials}>
-                        <Download size={12} /> 管理下载
+                        <Download size={12} /> {tr(locale, '管理下载', 'Downloads')}
                       </button>
                     )}
                   </div>
                 )
               })
             ) : (
-              <p className="empty-state">该课程暂无资料</p>
+              <p className="empty-state">{tr(locale, '该课程暂无资料', 'No materials available')}</p>
             )}
           </div>
 
           <div className="detail-section">
-            <h3 className="subheading">课程公告</h3>
+            <h3 className="subheading">{tr(locale, '课程公告', 'Announcements')}</h3>
             {courseAnnouncements.length ? (
               courseAnnouncements.map(item => {
                 const safe = safeHkuUrl(item.url)
@@ -225,7 +243,7 @@ export function MoodlePage({
                 )
               })
             ) : (
-              <p className="empty-state">该课程暂无公告</p>
+              <p className="empty-state">{tr(locale, '该课程暂无公告', 'No announcements')}</p>
             )}
           </div>
         </div>
@@ -237,18 +255,32 @@ export function MoodlePage({
     <section className="panel live-page">
       <div className="panel-head">
         <div>
-          <h2>Moodle</h2>
+          <h2>{tr(locale, 'Moodle', 'Moodle & GPA')}</h2>
           <p>
-            {filtered.courses.length} 门课程（点击课程可按课程查看详情） · {filtered.assignments.filter(item => !item.completed).length} 项待办 · {filtered.grades.length} 项成绩
+            {tr(
+              locale,
+              `${filtered.courses.length} 门课程（点击课程可按课程查看详情） · ${filtered.assignments.filter(item => !item.completed).length} 项待办 · ${filtered.grades.length} 项成绩`,
+              `${filtered.courses.length} courses (click for details & What-if) · ${filtered.assignments.filter(item => !item.completed).length} pending · ${filtered.grades.length} grades`,
+            )}
           </p>
         </div>
-        <button className="text-btn" onClick={onRefresh}>
-          <RefreshCw size={13} /> 刷新
-        </button>
+        <div className="head-inline-actions">
+          <button type="button" className="mini-action-btn" onClick={() => setShowGpa(prev => !prev)}>
+            <Calculator size={12} /> {showGpa ? tr(locale, '收起 GPA 模拟', 'Hide GPA Sim') : tr(locale, 'GPA 模拟器', 'GPA Simulator')}
+          </button>
+          <button className="text-btn" onClick={onRefresh}>
+            <RefreshCw size={13} /> {tr(locale, '刷新', 'Refresh')}
+          </button>
+        </div>
       </div>
+
+      {showGpa && (
+        <GpaSimulatorPanel locale={locale} courses={snapshot.courses} selectedCourse={null} />
+      )}
+
       <div className="live-columns">
         <div>
-          <h3 className="subheading">课程</h3>
+          <h3 className="subheading">{tr(locale, '课程', 'Courses')}</h3>
           {filtered.courses.length ? (
             filtered.courses.map(item => (
               <button
@@ -266,26 +298,26 @@ export function MoodlePage({
               </button>
             ))
           ) : (
-            <p className="empty-state">暂无课程</p>
+            <p className="empty-state">{tr(locale, '暂无课程', 'No courses')}</p>
           )}
         </div>
         <div>
           <div className="subheading-row">
-            <h3 className="subheading">待办与倒计时</h3>
+            <h3 className="subheading">{tr(locale, '待办与倒计时', 'Tasks & Countdowns')}</h3>
             {onOpenAddTask && (
               <button type="button" className="text-btn" onClick={() => onOpenAddTask()}>
-                <Plus size={12} /> 新建
+                <Plus size={12} /> {tr(locale, '新建', 'New')}
               </button>
             )}
           </div>
           {filtered.assignments.length ? (
             filtered.assignments.map(item => renderTaskRow(item, true))
           ) : (
-            <p className="empty-state">暂无待办</p>
+            <p className="empty-state">{tr(locale, '暂无待办', 'No pending tasks')}</p>
           )}
         </div>
         <div>
-          <h3 className="subheading">成绩</h3>
+          <h3 className="subheading">{tr(locale, '成绩', 'Grades')}</h3>
           {filtered.grades.length ? (
             filtered.grades.map(item => (
               <div className="live-row" key={item.id}>
@@ -293,18 +325,18 @@ export function MoodlePage({
                 <span>
                   {item.title}
                   <small>
-                    {item.course} · {formatGradeDisplay(item)}
+                    {item.course} · {formatGradeDisplay(item, locale)}
                   </small>
                 </span>
               </div>
             ))
           ) : (
-            <p className="empty-state">暂无可见成绩</p>
+            <p className="empty-state">{tr(locale, '暂无可见成绩', 'No released grades')}</p>
           )}
         </div>
       </div>
       <div className="live-announcements">
-        <h3 className="subheading">公告</h3>
+        <h3 className="subheading">{tr(locale, '公告', 'Announcements')}</h3>
         {filtered.announcements.length ? (
           filtered.announcements.slice(0, 12).map(item => {
             const safe = safeHkuUrl(item.url)
@@ -328,9 +360,10 @@ export function MoodlePage({
             )
           })
         ) : (
-          <p className="empty-state">暂无公告</p>
+          <p className="empty-state">{tr(locale, '暂无公告', 'No announcements')}</p>
         )}
       </div>
     </section>
   )
 }
+// end MoodlePage

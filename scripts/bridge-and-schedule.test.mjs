@@ -423,3 +423,51 @@ test('materials service classifies kinds, pins items, tracks NEW badges after ba
   }
 })
 // end v0.2.7 tests
+
+test('HKU 4.3 GPA simulator, course what-if calculator, and EN/ZH i18n helper work accurately', async () => {
+  const storage = new Map()
+  globalThis.localStorage = {
+    getItem: key => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, val) => storage.set(key, String(val)),
+    removeItem: key => storage.delete(key),
+  }
+  try {
+    const { parseNumericPercentage, computeCourseWhatIf, computeSemesterAndCgpa } = await loadTsModule('src/services/gpa.ts')
+    const { getLocale, setLocale, tr, localizedGreeting, NAV_LABELS } = await loadTsModule('src/services/i18n.ts')
+
+    assert.equal(parseNumericPercentage('42 / 50'), 84)
+    assert.equal(parseNumericPercentage('88.5%'), 88.5)
+    assert.equal(parseNumericPercentage('A+'), 90)
+
+    // 40% midterm at 80% = 32 banked points; target A (85%) requires (85 - 32)/0.6 = 88.33% on remaining 60%.
+    const whatIf = computeCourseWhatIf([{ scorePct: 80, weightPct: 40 }], 'A')
+    assert.equal(whatIf.bankedPoints, 32)
+    assert.equal(whatIf.remainingWeight, 60)
+    assert.equal(whatIf.requiredOnRemainingPct, 88.33)
+    assert.equal(whatIf.achievable, true)
+
+    // HKU 4.3 GPA: A+ (4.3 * 6) + B+ (3.3 * 6) + P (ignored * 6) = 45.6 / 12 = 3.80; combined with 60 credits @ 3.50 = (210 + 45.6)/72 = 3.55.
+    const gpa = computeSemesterAndCgpa(
+      [
+        { credits: 6, grade: 'A+' },
+        { credits: 6, grade: 'B+' },
+        { credits: 6, grade: 'P' },
+      ],
+      3.5,
+      60,
+    )
+    assert.equal(gpa.semesterCredits, 12)
+    assert.equal(gpa.semesterGpa, 3.8)
+    assert.equal(gpa.projectedCgpa, 3.55)
+
+    assert.equal(getLocale(), 'zh')
+    assert.equal(tr(getLocale(), '概览', 'Overview'), '概览')
+    setLocale('en')
+    assert.equal(getLocale(), 'en')
+    assert.equal(NAV_LABELS.en.moodle, 'Moodle & GPA')
+    assert.equal(localizedGreeting('en', new Date('2026-11-18T02:00:00Z')), 'Good morning')
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+// end v0.3.0 tests

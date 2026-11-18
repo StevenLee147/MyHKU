@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCheck, Download, ExternalLink, FileText, FolderOpen, Layers, RefreshCw, Star, XCircle } from 'lucide-react'
 import { safeHkuUrl, type DataMode, type LiveSnapshot } from '../services/hku'
+import { tr, type Locale } from '../services/i18n'
 import {
   classifyResourceKind,
   evaluateNewResources,
@@ -16,23 +17,25 @@ import {
 
 type MaterialFilter = 'all' | 'pinned' | 'new' | 'undownloaded' | 'pdf' | 'slides' | 'doc' | 'folder'
 
-const FILTER_OPTIONS: { key: MaterialFilter; label: string }[] = [
-  { key: 'all', label: '全部资料' },
-  { key: 'pinned', label: '★ 星标置顶' },
-  { key: 'new', label: '新增 NEW' },
-  { key: 'undownloaded', label: '待下载文件' },
-  { key: 'pdf', label: 'PDF' },
-  { key: 'slides', label: 'Slides 课件' },
-  { key: 'doc', label: 'Word / 表格' },
-  { key: 'folder', label: '文件夹 / 链接' },
+const FILTER_OPTIONS: { key: MaterialFilter; zh: string; en: string }[] = [
+  { key: 'all', zh: '全部资料', en: 'All' },
+  { key: 'pinned', zh: '★ 星标置顶', en: '★ Pinned' },
+  { key: 'new', zh: '新增 NEW', en: 'NEW' },
+  { key: 'undownloaded', zh: '待下载文件', en: 'Undownloaded' },
+  { key: 'pdf', zh: 'PDF', en: 'PDF' },
+  { key: 'slides', zh: 'Slides 课件', en: 'Slides' },
+  { key: 'doc', zh: 'Word / 表格', en: 'Docs / Sheets' },
+  { key: 'folder', zh: '文件夹 / 链接', en: 'Folders / Links' },
 ]
 
 export function MaterialsPage({
+  locale = 'zh',
   snapshot,
   dataMode,
   query,
   onRefresh,
 }: {
+  locale?: Locale
   snapshot: LiveSnapshot
   dataMode: DataMode
   query: string
@@ -209,22 +212,22 @@ export function MaterialsPage({
     <section className="panel live-page">
       <div className="panel-head">
         <div>
-          <h2>课程资料</h2>
-          <p>按课程批量下载 · 本地文件持久化索引 · 类型筛选与星标置顶</p>
+          <h2>{tr(locale, '课程资料', 'Course Materials')}</h2>
+          <p>{tr(locale, '按课程批量下载 · 本地文件持久化索引 · 类型筛选与星标置顶', 'Batch download · Persistent local file index · Type filters & pinned items')}</p>
         </div>
         <div className="head-inline-actions">
           {newIds.size > 0 && (
             <button type="button" className="mini-action-btn" onClick={() => setNewIds(markAllResourcesSeen())}>
-              <CheckCheck size={12} /> 全部标为已读 ({newIds.size})
+              <CheckCheck size={12} /> {tr(locale, `全部标为已读 (${newIds.size})`, `Mark All Read (${newIds.size})`)}
             </button>
           )}
           <button className="text-btn" onClick={onRefresh}>
-            <RefreshCw size={13} /> 刷新
+            <RefreshCw size={13} /> {tr(locale, '刷新', 'Refresh')}
           </button>
         </div>
       </div>
 
-      <div className="materials-filter-bar" role="tablist" aria-label="资料类型筛选">
+      <div className="materials-filter-bar" role="tablist" aria-label={tr(locale, '资料类型筛选', 'Material Filters')}>
         {FILTER_OPTIONS.map(opt => (
           <button
             type="button"
@@ -234,7 +237,7 @@ export function MaterialsPage({
             className={`filter-pill ${filter === opt.key ? 'active' : ''}`}
             onClick={() => setFilter(opt.key)}
           >
-            {opt.label}
+            {locale === 'en' ? opt.en : opt.zh}
           </button>
         ))}
       </div>

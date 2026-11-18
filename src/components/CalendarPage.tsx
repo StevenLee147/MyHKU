@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, Plus, RefreshCw } from 'lucide-react'
 import { CATEGORY_LABELS, mergeWithCustomTasks, type CustomTask, type UnifiedAssignment } from '../services/customTasks'
 import type { DataMode, LiveSnapshot } from '../services/hku'
+import { tr, type Locale } from '../services/i18n'
+// calendar i18n imported
 import { cleanDueDisplay, parseDueTimestamp, sortAssignmentsByDue } from '../services/notifications'
 import {
   baseWeekStartDate,
@@ -43,6 +45,7 @@ function scheduleDayIndex(item: LiveSnapshot['schedule'][number], weekStart: Dat
 }
 
 export function CalendarPage({
+  locale = 'zh',
   snapshot,
   customTasks = [],
   dataMode = 'live',
@@ -54,6 +57,7 @@ export function CalendarPage({
   onExportIcs,
   onOpenAddTask,
 }: {
+  locale?: Locale
   snapshot: LiveSnapshot
   customTasks?: CustomTask[]
   dataMode?: DataMode
@@ -65,6 +69,7 @@ export function CalendarPage({
   onExportIcs?: () => void
   onOpenAddTask?: () => void
 }) {
+  // calendar props
   const [weekOffset, setWeekOffset] = useState(0)
   const [loadingWeek, setLoadingWeek] = useState<number | null>(null)
   const autoSyncedWeekRef = useRef<string | null>(null)
@@ -166,7 +171,7 @@ export function CalendarPage({
   }
 
   const formatDay = (day: Date) =>
-    new Intl.DateTimeFormat('zh-CN', { weekday: 'short', month: 'numeric', day: 'numeric' }).format(day)
+    new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'zh-CN', { weekday: 'short', month: 'numeric', day: 'numeric' }).format(day)
   const allEvents = dayEvents.flat()
   const firstHour = Math.min(8, ...allEvents.map(event => Math.floor(event.start / 60)))
   const lastHour = Math.max(19, ...allEvents.map(event => Math.ceil(event.end / 60)))
@@ -192,34 +197,37 @@ export function CalendarPage({
     <section className="panel live-page">
       <div className="panel-head">
         <div>
-          <h2>我的课表</h2>
+          <h2>{tr(locale, '我的课表', 'Weekly Timetable')}</h2>
           <p>
-            周视图 · {formatWeekRangeLabel(weekStart, weekEnd)} · 本周 {weekMeetingCount} 节课程
-            {cachedWeeksCount > 1 ? `（已预抓 ${cachedWeeksCount} 周课表）` : ''}
+            {tr(
+              locale,
+              `周视图 · ${formatWeekRangeLabel(weekStart, weekEnd)} · 本周 ${weekMeetingCount} 节课程${cachedWeeksCount > 1 ? `（已预抓 ${cachedWeeksCount} 周课表）` : ''}`,
+              `Week view · ${formatWeekRangeLabel(weekStart, weekEnd)} · ${weekMeetingCount} sessions${cachedWeeksCount > 1 ? ` (${cachedWeeksCount} weeks cached)` : ''}`,
+            )}
           </p>
         </div>
         <div className="calendar-actions">
           {onOpenAddTask && (
             <button type="button" className="text-btn" onClick={onOpenAddTask}>
-              <Plus size={13} /> 新建倒计时
+              <Plus size={13} /> {tr(locale, '新建倒计时', 'Add Task')}
             </button>
           )}
           {onExportIcs && (
             <button type="button" className="text-btn" onClick={onExportIcs}>
-              <CalendarPlus size={13} /> 导出 .ics
+              <CalendarPlus size={13} /> {tr(locale, '导出 .ics', 'Export .ics')}
             </button>
           )}
           <button className="text-btn" onClick={() => void moveWeek(-1)} disabled={loadingWeek !== null}>
-            <ChevronLeft size={13} /> 上周
+            <ChevronLeft size={13} /> {tr(locale, '上周', 'Prev')}
           </button>
           <button className="text-btn" onClick={() => void moveWeek(0)} disabled={loadingWeek !== null || weekOffset === 0}>
-            本周
+            {tr(locale, '本周', 'This Week')}
           </button>
           <button className="text-btn" onClick={() => void moveWeek(1)} disabled={loadingWeek !== null}>
-            下周 <ChevronRight size={13} />
+            {tr(locale, '下周', 'Next')} <ChevronRight size={13} />
           </button>
           <button className="text-btn" onClick={onRefresh} disabled={loadingWeek !== null}>
-            <RefreshCw size={13} className={loadingWeek !== null ? 'spin' : ''} /> 刷新
+            <RefreshCw size={13} className={loadingWeek !== null ? 'spin' : ''} /> {tr(locale, '刷新', 'Refresh')}
           </button>
         </div>
       </div>
