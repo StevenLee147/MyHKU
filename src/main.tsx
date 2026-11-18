@@ -21,6 +21,7 @@ import {
 import './styles.css'
 import { LegalGate } from './legal'
 import { AccountSetup } from './components/AccountSetup'
+import { CommandPaletteModal } from './components/CommandPaletteModal'
 import { CustomTaskModal } from './components/CustomTaskModal'
 import { CalendarPage } from './components/CalendarPage'
 import { MaterialsPage } from './components/MaterialsPage'
@@ -32,6 +33,7 @@ import {
   customTaskToUnified,
   deleteCustomTask,
   getCustomTasks,
+  mergeWithCustomTasks,
   toggleCustomTask,
   updateCustomTask,
   type CustomTask,
@@ -70,11 +72,14 @@ import {
   type Locale,
 } from './services/i18n'
 import {
+  cleanDueDisplay,
   getNotificationFeed,
   markAllNotificationsRead,
+  sortAssignmentsByDue,
   type AppNotificationItem,
   type NavTarget,
 } from './services/notifications'
+import { findNextOrCurrentClass } from './services/schedule'
 
 const navItems: { key: NavTarget; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'overview', label: '概览', icon: LayoutDashboard },
@@ -114,6 +119,7 @@ function App() {
   const [taskModalOpen, setTaskModalOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<CustomTask | null>(null)
   const [defaultTaskCourse, setDefaultTaskCourse] = useState('')
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   const searchInputRef = useRef<HTMLInputElement>(null)
   const started = useRef(false)
@@ -136,8 +142,7 @@ function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        searchInputRef.current?.focus()
-        searchInputRef.current?.select()
+        setPaletteOpen(prev => !prev)
       } else if (event.key === 'Escape') {
         setUserMenuOpen(false)
         setNotifMenuOpen(false)
@@ -402,6 +407,28 @@ function App() {
   const demoSnapshot = useMemo(() => buildDemoSnapshot(), [])
   const activeSnapshot = dataMode === 'demo' ? demoSnapshot : liveSnapshot
 
+  useEffect(() => {
+    if (!window.myhkuDesktop?.updateTraySummary) return
+    const pushSummary = () => {
+      if (!activeSnapshot) {
+        void window.myhkuDesktop?.updateTraySummary?.({ nextClass: '', nextDdl: '' })
+        return
+      }
+      const focus = findNextOrCurrentClass(activeSnapshot, new Date())
+      const nextClass = focus
+        ? `${focus.status === 'ongoing' ? '正在上课' : '下节课'}: ${focus.item.title} (${focus.item.start}${focus.item.room ? ` @ ${focus.item.room}` : ''})`
+        : ''
+      const topDdl = sortAssignmentsByDue(
+        mergeWithCustomTasks(activeSnapshot.assignments, customTasks).filter(item => !item.completed),
+      )[0]
+      const nextDdl = topDdl ? `近期截止: ${topDdl.course} · ${topDdl.title} (${cleanDueDisplay(topDdl.due)})` : ''
+      void window.myhkuDesktop?.updateTraySummary?.({ nextClass, nextDdl })
+    }
+    pushSummary()
+    const timer = window.setInterval(pushSummary, 60_000)
+    return () => window.clearInterval(timer)
+  }, [activeSnapshot, customTasks])
+
   const handleExportIcs = useCallback(() => {
     if (!activeSnapshot) {
       showToast('暂无可导出的课表或待办数据')
@@ -552,7 +579,17 @@ function App() {
                   <X size={13} />
                 </button>
               ) : (
-                <kbd>{shortcutHint}</kbd>
+                <button
+                  type="button"
+                  className="palette-trigger-btn"
+                  onClick={e => {
+                    e.preventDefault()
+                    setPaletteOpen(true)
+                  }}
+                  title={tr(locale, '打开快捷命令面板', 'Open Command Palette')}
+                >
+                  <kbd>{shortcutHint}</kbd>
+                </button>
               )}
             </label>
 
@@ -864,6 +901,31 @@ function App() {
           setEditingTask(null)
         }}
         onSave={handleSaveCustomTask}
+      />
+
+      <CommandPaletteModal
+        open={paletteOpen}
+        locale={locale}
+        themeMode={themeMode}
+        snapshot={activeSnapshot}
+        customTasks={customTasks}
+        onClose={() => setPaletteOpen(false)}
+        onNavigate={(target, courseCode) => handleNavigate(target, courseCode)}
+        onSelectCourse={course => handleNavigate('moodle', course)}
+        onSync={() => sync(true)}
+        onOpenAddTask={() => openAddTaskModal()}
+        onExportIcs={handleExportIcs}
+        onToggleTheme={next => {
+          setThemeMode(next)
+          setThemeModeState(next)
+          showToast(
+            next === 'dark'
+              ? tr(locale, '已切换为深色主题', 'Dark theme enabled')
+              : tr(locale, '已切换为浅色主题', 'Light theme enabled'),
+            2000,
+          )
+        }}
+        onToggleLocale={() => handleSetLocale(locale === 'zh' ? 'en' : 'zh')}
       />
     </div>
   )

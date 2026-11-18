@@ -10,6 +10,12 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
   downloadResource: (url) => ipcRenderer.invoke('myhku-download-resource', String(url)),
   downloadResourceDetailed: (url) => ipcRenderer.invoke('myhku-download-resource-detailed', String(url)),
   getDownloadedIndex: () => ipcRenderer.invoke('myhku-get-downloaded-index'),
+  getDesktopPrefs: () => ipcRenderer.invoke('myhku-get-desktop-prefs'),
+  setDesktopPrefs: (prefs) => ipcRenderer.invoke('myhku-set-desktop-prefs', { minimizeToTray: Boolean(prefs?.minimizeToTray) }),
+  updateTraySummary: (summary) => ipcRenderer.invoke('myhku-update-tray-summary', {
+    nextClass: typeof summary?.nextClass === 'string' ? summary.nextClass : '',
+    nextDdl: typeof summary?.nextDdl === 'string' ? summary.nextDdl : '',
+  }),
   openDownloadedFile: (filePath) => ipcRenderer.invoke('myhku-open-downloaded-file', String(filePath)),
   revealDownloadedFile: (filePath) => ipcRenderer.invoke('myhku-reveal-downloaded-file', String(filePath)),
   accountStatus: () => ipcRenderer.invoke('myhku-account-status'),

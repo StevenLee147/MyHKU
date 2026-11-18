@@ -1,10 +1,10 @@
-import { useMemo } from 'react'
-import { Bell, BookOpen, CalendarDays, CalendarPlus, Clock3, Download, ExternalLink, Link2, Plus, RefreshCw, ShieldCheck, Sparkles, Trophy } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Bell, BookOpen, CalendarDays, CalendarPlus, Clock3, Compass, Download, ExternalLink, Link2, MapPin, Plus, RefreshCw, ShieldCheck, Sparkles, Trophy } from 'lucide-react'
 import { CATEGORY_LABELS, mergeWithCustomTasks, type CustomTask, type UnifiedAssignment } from '../services/customTasks'
 import { safeHkuUrl, type DataMode, type LiveSnapshot } from '../services/hku'
 import { tr, type Locale } from '../services/i18n'
 import { formatDueBadge, sortAssignmentsByDue, type NavTarget } from '../services/notifications'
-import { todayClasses } from '../services/schedule'
+import { findNextOrCurrentClass, todayClasses } from '../services/schedule'
 
 export type ConnectionPhase = 'checking' | 'connected' | 'manual' | 'disconnected'
 
@@ -39,8 +39,18 @@ export function OverviewPage({
   onToggleCustomTask?: (id: string) => void
   onExportIcs?: () => void
 }) {
-  // locale enabled
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
+
   const keyword = query.trim().toLowerCase()
+
+  const nextClassFocus = useMemo(
+    () => (snapshot ? findNextOrCurrentClass(snapshot, new Date(nowTick)) : null),
+    [snapshot, nowTick],
+  )
 
   const classesToday = useMemo(() => {
     if (!snapshot) return []
@@ -110,8 +120,76 @@ export function OverviewPage({
   const urgentCount = pendingAssignments.filter(item => formatDueBadge(item.due, item.completed).tone === 'urgent').length
   const dueTop = pendingAssignments.slice(0, 5)
 
+  const formatFocusCountdown = () => {
+    if (!nextClassFocus) return ''
+    if (nextClassFocus.status === 'ongoing') {
+      return tr(
+        locale,
+        `正在上课 · 剩余 ${nextClassFocus.minutesUntilEnd} 分钟`,
+        `In Progress · ${nextClassFocus.minutesUntilEnd} min left`,
+      )
+    }
+    const mins = nextClassFocus.minutesUntilStart
+    if (mins < 60) {
+      return tr(locale, `${mins} 分钟后上课`, `Starts in ${mins} min`)
+    }
+    if (nextClassFocus.dayOffset === 0) {
+      const h = Math.floor(mins / 60)
+      const m = mins % 60
+      return tr(locale, `${h} 小时 ${m} 分后上课`, `Starts in ${h}h ${m}m`)
+    }
+    if (nextClassFocus.dayOffset === 1) {
+      return tr(locale, `明天 ${nextClassFocus.item.start} 上课`, `Tomorrow at ${nextClassFocus.item.start}`)
+    }
+    return tr(
+      locale,
+      `${nextClassFocus.dateIso.slice(5)} ${nextClassFocus.item.start} 上课`,
+      `${nextClassFocus.dateIso.slice(5)} at ${nextClassFocus.item.start}`,
+    )
+  }
+
   return (
     <>
+      {nextClassFocus && (
+        <section
+          className={`panel next-class-focus ${nextClassFocus.status}`}
+          onClick={() => onNavigate('calendar')}
+          role="button"
+          tabIndex={0}
+          onKeyDown={e => e.key === 'Enter' && onNavigate('calendar')}
+        >
+          <div className="focus-badge">
+            <Compass size={16} />
+            <span>{nextClassFocus.status === 'ongoing' ? tr(locale, '正在上课', 'Now') : tr(locale, '下一节课聚焦', 'Next Class')}</span>
+          </div>
+          <div className="focus-main">
+            <strong>
+              {nextClassFocus.item.title}
+              {nextClassFocus.item.code && !nextClassFocus.item.title.includes(nextClassFocus.item.code)
+                ? ` · ${nextClassFocus.item.code}`
+                : ''}
+            </strong>
+            <p>
+              <span>
+                {nextClassFocus.dateIso} · {nextClassFocus.item.start}–{nextClassFocus.item.end}
+              </span>
+              <span>
+                <MapPin size={12} /> {nextClassFocus.item.room || tr(locale, '未提供教室', 'TBA')}
+              </span>
+            </p>
+            {nextClassFocus.status === 'ongoing' && (
+              <div className="focus-progress-track" aria-hidden="true">
+                <div
+                  className="focus-progress-fill"
+                  style={{ transform: `scaleX(${Math.max(0, Math.min(1, nextClassFocus.progressPct / 100))})` }}
+                />
+              </div>
+            )}
+          </div>
+          <div className="focus-countdown">{formatFocusCountdown()}</div>
+        </section>
+      )}
+
       <section className="stats">
         <div className="stat-card" onClick={() => onNavigate('calendar')} role="button" tabIndex={0} onKeyDown={e => e.key === 'Enter' && onNavigate('calendar')}>
           <div className="stat-icon blue">

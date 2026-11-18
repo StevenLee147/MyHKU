@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Bell, CircleAlert, ExternalLink, Globe, KeyRound, Link2, LogIn, LogOut, Monitor, Moon, RefreshCw, ShieldCheck, Sun } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { AppWindow, Bell, CircleAlert, ExternalLink, Globe, KeyRound, Link2, LogIn, LogOut, Monitor, Moon, RefreshCw, ShieldCheck, Sun } from 'lucide-react'
 import { LegalSettings } from '../legal'
 import {
   checkAllConnections,
@@ -63,6 +63,42 @@ export function SettingsPage({
   const [notifPerm, setNotifPerm] = useState<string>(() =>
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported',
   )
+  const [minimizeToTray, setMinimizeToTray] = useState(false)
+  const [traySupported, setTraySupported] = useState(() => Boolean(window.myhkuDesktop?.getDesktopPrefs))
+
+  useEffect(() => {
+    let active = true
+    const loadPrefs = async () => {
+      if (!window.myhkuDesktop?.getDesktopPrefs) return
+      try {
+        const prefs = await window.myhkuDesktop.getDesktopPrefs()
+        if (!active || !prefs) return
+        setMinimizeToTray(Boolean(prefs.minimizeToTray))
+        setTraySupported(true)
+      } catch {
+        /* ignore */
+      }
+    }
+    void loadPrefs()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const toggleMinimizeToTray = async () => {
+    if (!window.myhkuDesktop?.setDesktopPrefs) return
+    try {
+      const next = await window.myhkuDesktop.setDesktopPrefs({ minimizeToTray: !minimizeToTray })
+      setMinimizeToTray(Boolean(next?.minimizeToTray))
+      onNotice(
+        next?.minimizeToTray
+          ? tr(locale, '已开启：关闭主窗口时将最小化至系统托盘后台守护', 'Enabled: Closing the window minimizes MyHKU to the system tray')
+          : tr(locale, '已关闭：关闭主窗口将直接退出应用', 'Disabled: Closing the window quits MyHKU'),
+      )
+    } catch {
+      onNotice(tr(locale, '无法保存系统托盘设置', 'Unable to update system tray preference'))
+    }
+  }
 
   const login = async (site: HkuSite) => {
     if (mode !== 'live') setMode('live')
@@ -255,6 +291,33 @@ export function SettingsPage({
           </span>
         </div>
       </section>
+
+      {traySupported && (
+        <section className="panel settings-card">
+          <div className="panel-head">
+            <div>
+              <h2>{tr(locale, '桌面端系统托盘与后台守护', 'Desktop System Tray & Background Resident')}</h2>
+              <p>
+                {tr(
+                  locale,
+                  '在系统托盘菜单实时预览下一节课与近期截止事项；开启后点击窗口关闭按钮会隐藏至托盘继续按日刷新与提醒。',
+                  'Preview your next class and upcoming deadline in the tray menu; keep MyHKU running in the tray when closing the window.',
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              className={minimizeToTray ? 'primary-btn' : 'outline-btn'}
+              onClick={() => void toggleMinimizeToTray()}
+            >
+              <AppWindow size={14} />{' '}
+              {minimizeToTray
+                ? tr(locale, '已开启：最小化到托盘', 'Minimize to Tray: ON')
+                : tr(locale, '开启最小化到托盘', 'Enable Minimize to Tray')}
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="panel settings-card">
         <div className="panel-head">

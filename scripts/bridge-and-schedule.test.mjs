@@ -471,3 +471,36 @@ test('HKU 4.3 GPA simulator, course what-if calculator, and EN/ZH i18n helper wo
   }
 })
 // end v0.3.0 tests
+
+test('findNextOrCurrentClass detects ongoing class progress and next upcoming class across days in Asia/Hong_Kong', async () => {
+  const { findNextOrCurrentClass } = await loadTsModule('src/services/schedule.ts')
+  const snapshot = {
+    fetchedAt: '2026-11-18T02:00:00Z',
+    scheduleWeek: { start: '2026-11-15', end: '2026-11-21' },
+    scheduleWeeks: [{ start: '2026-11-15', end: '2026-11-21' }],
+    schedule: [
+      { id: 'wed-am', title: 'GLIS1905 Seminar', code: 'GLIS1905', date: '2026-11-18', start: '09:30', end: '11:30', room: 'CPD-LG.18' },
+      { id: 'thu-pm', title: 'COMP7901 Lecture', code: 'COMP7901', date: '2026-11-19', start: '14:30', end: '16:20', room: 'MB100' },
+    ],
+    courses: [],
+    assignments: [],
+    resources: [],
+    grades: [],
+    announcements: [],
+  }
+
+  // 2026-11-18 10:30 HKT = 02:30 UTC -> halfway (50%) through 09:30-11:30 class
+  const ongoing = findNextOrCurrentClass(snapshot, new Date('2026-11-18T02:30:00Z'))
+  assert.equal(ongoing.status, 'ongoing')
+  assert.equal(ongoing.item.id, 'wed-am')
+  assert.equal(ongoing.minutesUntilEnd, 60)
+  assert.equal(ongoing.progressPct, 50)
+
+  // 2026-11-18 13:00 HKT = 05:00 UTC -> Wednesday class finished, next class is Thursday 14:30 (dayOffset=1)
+  const upcoming = findNextOrCurrentClass(snapshot, new Date('2026-11-18T05:00:00Z'))
+  assert.equal(upcoming.status, 'upcoming')
+  assert.equal(upcoming.item.id, 'thu-pm')
+  assert.equal(upcoming.dayOffset, 1)
+  assert.equal(upcoming.dateIso, '2026-11-19')
+})
+// end v0.3.1-beta tests

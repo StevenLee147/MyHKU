@@ -232,3 +232,85 @@ export function layoutDayEvents(rawEvents: Array<{ item: LiveClass; start: numbe
   flushCluster()
   return placed
 }
+
+export type NextClassFocus = {
+  status: 'ongoing' | 'upcoming'
+  item: LiveClass
+  dateIso: string
+  dayOffset: number
+  minutesUntilStart: number
+  minutesUntilEnd: number
+  progressPct: number
+}
+
+export function hongKongClockMinutes(now = new Date()): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Hong_Kong',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now)
+  const h = Number(parts.find(p => p.type === 'hour')?.value || '0')
+  const m = Number(parts.find(p => p.type === 'minute')?.value || '0')
+  return h * 60 + m
+}
+
+export function findNextOrCurrentClass(snapshot: LiveSnapshot, now = new Date()): NextClassFocus | null {
+  if (!snapshot.schedule.length) return null
+  const todayIso = hongKongDate(now)
+  const nowMins = hongKongClockMinutes(now)
+
+  for (let dayOffset = 0; dayOffset <= 7; dayOffset += 1) {
+    const targetIso = dayOffset === 0 ? todayIso : addCalendarDaysIso(todayIso, dayOffset)
+    if (!targetIso) continue
+    const dow = calendarWeekday(targetIso) ?? 0
+    const weekStartIso = addCalendarDaysIso(targetIso, -dow) ?? targetIso
+    const weekEndIso = addCalendarDaysIso(weekStartIso, 6) ?? targetIso
+    const matchingWeek = snapshot.scheduleWeeks?.find(w => targetIso >= w.start && targetIso <= w.end)
+    const week = matchingWeek || (
+      snapshot.scheduleWeek && targetIso >= snapshot.scheduleWeek.start && targetIso <= snapshot.scheduleWeek.end
+        ? snapshot.scheduleWeek
+        : snapshot.schedule.some(item => Boolean(item.date))
+          ? { start: weekStartIso, end: weekEndIso }
+          : dayOffset === 0 ? snapshot.scheduleWeek : undefined
+    )
+    if (!week && !snapshot.schedule.some(item => Boolean(item.date))) continue
+    const dayItems = snapshot.schedule
+      .filter(item => scheduleDate(item, week) === targetIso)
+      .map(item => {
+        const start = parseClockMinutes(item.start)
+        const end = parseClockMinutes(item.end)
+        return start !== null ? { item, start, end: end !== null && end > start ? end : start + 50 } : null
+      })
+      .filter((entry): entry is { item: LiveClass; start: number; end: number } => entry !== null)
+      .sort((a, b) => a.start - b.start)
+
+    for (const entry of dayItems) {
+      if (dayOffset === 0 && nowMins >= entry.start && nowMins < entry.end) {
+        const duration = Math.max(1, entry.end - entry.start)
+        return {
+          status: 'ongoing',
+          item: entry.item,
+          dateIso: targetIso,
+          dayOffset: 0,
+          minutesUntilStart: 0,
+          minutesUntilEnd: entry.end - nowMins,
+          progressPct: Math.min(100, Math.max(0, Math.round(((nowMins - entry.start) / duration) * 100))),
+        }
+      }
+      if (dayOffset > 0 || entry.start > nowMins) {
+        const minsUntil = dayOffset * 1440 + (entry.start - nowMins)
+        return {
+          status: 'upcoming',
+          item: entry.item,
+          dateIso: targetIso,
+          dayOffset,
+          minutesUntilStart: Math.max(1, minsUntil),
+          minutesUntilEnd: Math.max(1, minsUntil + (entry.end - entry.start)),
+          progressPct: 0,
+        }
+      }
+    }
+  }
+  return null
+}

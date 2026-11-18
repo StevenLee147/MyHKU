@@ -12,6 +12,9 @@ interface Window {
     downloadResource?: (url: string) => Promise<number>
     downloadResourceDetailed?: (url: string) => Promise<DesktopDownloadResult>
     getDownloadedIndex?: () => Promise<Record<string, string[]>>
+    getDesktopPrefs?: () => Promise<{ minimizeToTray: boolean; trayAvailable: boolean }>
+    setDesktopPrefs?: (prefs: { minimizeToTray: boolean }) => Promise<{ minimizeToTray: boolean; trayAvailable: boolean }>
+    updateTraySummary?: (summary: { nextClass?: string; nextDdl?: string }) => Promise<boolean>
     openDownloadedFile?: (filePath: string) => Promise<boolean>
     revealDownloadedFile?: (filePath: string) => Promise<boolean>
     authSessions?: () => Promise<DesktopSessions>

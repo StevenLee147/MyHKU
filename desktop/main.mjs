@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, session, shell, webFrameMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, session, shell, Tray, webFrameMain } from 'electron'
 import { fileLinksFromHtml, resolveMoodleDownloads, saveMoodleDownload } from './downloads.mjs'
 import { AuthCoordinator, AUTH_TIMING, SERVICE_URLS, inspectAuthPage, serviceForUrl } from './auth-flow.mjs'
 import { spawn } from 'node:child_process'
@@ -81,6 +81,100 @@ function persistDownloadedIndex() {
     /* non-fatal cache write */
   }
 }
+let tray = null
+let desktopPrefsCache
+const traySummary = { nextClass: '', nextDdl: '' }
+const desktopPrefsFile = () => join(app.getPath('userData'), 'myhku-cache-prefs.json')
+
+function readDesktopPrefs() {
+  if (desktopPrefsCache !== undefined) return desktopPrefsCache
+  try {
+    const raw = JSON.parse(readFileSync(desktopPrefsFile(), 'utf8'))
+    desktopPrefsCache = { minimizeToTray: Boolean(raw?.minimizeToTray) }
+  } catch {
+    desktopPrefsCache = { minimizeToTray: false }
+  }
+  return desktopPrefsCache
+}
+
+function saveDesktopPrefs(next) {
+  const prefs = { minimizeToTray: Boolean(next?.minimizeToTray) }
+  desktopPrefsCache = prefs
+  try {
+    mkdirSync(app.getPath('userData'), { recursive: true })
+    const temp = `${desktopPrefsFile()}.${process.pid}.tmp`
+    writeFileSync(temp, JSON.stringify(prefs), { mode: 0o600 })
+    renameSync(temp, desktopPrefsFile())
+  } catch {
+    /* ignore non-fatal preference write */
+  }
+  refreshTrayMenu()
+  return prefs
+}
+
+function revealDashboardWindow() {
+  if (!dashboard || dashboard.isDestroyed()) createDashboard()
+  if (dashboard.isMinimized()) dashboard.restore()
+  dashboard.show()
+  dashboard.focus()
+}
+
+function refreshTrayMenu() {
+  if (!tray || tray.isDestroyed?.()) return
+  const prefs = readDesktopPrefs()
+  const classLine = traySummary.nextClass || '下一节课：暂无近期课程'
+  const ddlLine = traySummary.nextDdl || '近期截止：暂无待办事项'
+  tray.setToolTip(`MyHKU · ${classLine}`)
+  const menu = Menu.buildFromTemplate([
+    { label: 'MyHKU 学习助手', enabled: false },
+    { label: classLine.slice(0, 90), enabled: false },
+    { label: ddlLine.slice(0, 90), enabled: false },
+    { type: 'separator' },
+    { label: '打开 / 显示主窗口', click: () => revealDashboardWindow() },
+    {
+      label: '立即同步 HKU 数据',
+      click: () => {
+        if (hasLegalConsent() && readAccount()) {
+          for (const site of Object.keys(SERVICE_URLS)) auth.request(site, { refresh: true })
+        }
+        revealDashboardWindow()
+      },
+    },
+    {
+      label: '关闭窗口时最小化到托盘',
+      type: 'checkbox',
+      checked: prefs.minimizeToTray,
+      click: item => {
+        saveDesktopPrefs({ minimizeToTray: item.checked })
+      },
+    },
+    { type: 'separator' },
+    {
+      label: '退出 MyHKU',
+      click: () => {
+        quitting = true
+        app.quit()
+      },
+    },
+  ])
+  tray.setContextMenu(menu)
+}
+
+function setupTray() {
+  if (tray || process.env.MYHKU_DISABLE_TRAY === '1' || String(devUrl || '').startsWith('data:')) return
+  try {
+    const iconPath = join(sourceRoot, 'dist', 'brand', 'icon-512.png')
+    if (!existsSync(iconPath)) return
+    const img = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
+    if (img.isEmpty()) return
+    tray = new Tray(img)
+    tray.on('click', () => revealDashboardWindow())
+    refreshTrayMenu()
+  } catch {
+    tray = null
+  }
+}
+
 const windowFlows = new WeakMap()
 const auth = new AuthCoordinator(startServiceLogin, publishAuthStatus)
 let quitting = false
@@ -127,6 +221,9 @@ async function resetAccountSessions() {
   sessionDownloadedPaths.clear()
   downloadedIndexByUrl.clear()
   downloadedIndexLoaded = true
+  traySummary.nextClass = ''
+  traySummary.nextDdl = ''
+  refreshTrayMenu()
   for (const win of authWindows) if (!win.isDestroyed()) win.destroy()
   const official = (await import('electron')).session.fromPartition('persist:myhku-hku')
   await official.clearStorageData()
@@ -574,11 +671,17 @@ function createDashboard() {
       sandbox: true,
     },
   })
+  dashboard.on('close', event => {
+    if (!quitting && readDesktopPrefs().minimizeToTray && tray) {
+      event.preventDefault()
+      dashboard.hide()
+    }
+  })
   dashboard.on('closed', () => {
     dashboard = null
     // Hidden authenticated windows must not leave a second app/bridge behind
     // when the user closes the Windows dashboard and launches MyHKU again.
-    if (process.platform === 'win32' && !quitting) app.quit()
+    if (process.platform === 'win32' && !quitting && !(readDesktopPrefs().minimizeToTray && tray)) app.quit()
   })
   dashboard.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedUrl(url)) {
@@ -928,26 +1031,49 @@ handleDashboard('myhku-schedule-week', async (_event, rawRequest) => {
   return true
 })
 
+handleDashboard('myhku-get-desktop-prefs', () => ({
+  ...readDesktopPrefs(),
+  trayAvailable: Boolean(tray),
+}))
+
+handleDashboard('myhku-set-desktop-prefs', (_event, value) => ({
+  ...saveDesktopPrefs(value || {}),
+  trayAvailable: Boolean(tray),
+}))
+
+handleDashboard('myhku-update-tray-summary', (_event, value) => {
+  if (value && typeof value === 'object') {
+    traySummary.nextClass = typeof value.nextClass === 'string' ? value.nextClass.slice(0, 120) : ''
+    traySummary.nextDdl = typeof value.nextDdl === 'string' ? value.nextDdl.slice(0, 120) : ''
+    refreshTrayMenu()
+  }
+  return true
+})
+
 const ownsInstance = app.requestSingleInstanceLock()
 if (!ownsInstance) app.quit()
 app.on('second-instance', () => {
-  if (!dashboard || dashboard.isDestroyed()) createDashboard()
-  if (dashboard.isMinimized()) dashboard.restore()
-  dashboard.show()
-  dashboard.focus()
+  revealDashboardWindow()
 })
 
 if (ownsInstance) app.whenReady().then(async () => {
   app.setAppUserModelId('hk.my.myhku')
   await startDashboardServer()
   createDashboard()
+  setupTray()
   startConsentedServices()
-  app.on('activate', () => { if (!dashboard || dashboard.isDestroyed()) createDashboard() })
+  app.on('activate', () => { revealDashboardWindow() })
 }).catch(error => dialog.showErrorBox('MyHKU 启动失败', error.stack || error.message))
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin' && !(readDesktopPrefs().minimizeToTray && tray && !quitting)) app.quit()
+})
 app.on('before-quit', () => {
   quitting = true
+  if (tray) {
+    try { tray.destroy() } catch { /* ignore */ }
+    tray = null
+  }
   if (bridgeProcess && !bridgeProcess.killed) bridgeProcess.kill()
   if (uiServer) uiServer.close()
 })
