@@ -3145,3 +3145,95 @@ dialog.myhku-modal.command-palette-dialog {
   }
 }
 /* end v0.3.1-beta styles */
+
+/* v0.4.0-beta Updater, Diagnostics & Backup Cards */
+.settings-card .panel-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.update-result-box {
+  margin: 0 22px 18px;
+  padding: 13px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-subtle);
+  display: grid;
+  gap: 9px;
+}
+
+.update-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.update-result-head strong {
+  font-size: 13px;
+  color: var(--text-heading);
+}
+
+.update-result-head small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.update-summary-text {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.update-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.update-result-actions a {
+  text-decoration: none;
+}
+
+.diag-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+  padding: 0 22px 18px;
+}
+
+.diag-metric {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.diag-metric small {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.diag-metric strong {
+  display: block;
+  font-size: 15px;
+  color: var(--text-heading);
+  margin-top: 3px;
+}
+
+@media (max-width: 640px) {
+  .update-result-box {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+  .diag-metrics-grid {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+/* end v0.4.0-beta styles */

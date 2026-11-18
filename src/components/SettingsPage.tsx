@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { AppWindow, Bell, CircleAlert, ExternalLink, Globe, KeyRound, Link2, LogIn, LogOut, Monitor, Moon, RefreshCw, ShieldCheck, Sun } from 'lucide-react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { Activity, AppWindow, Bell, CircleAlert, DatabaseBackup, Download, ExternalLink, Globe, KeyRound, Link2, LogIn, LogOut, Monitor, Moon, RefreshCw, ShieldCheck, Sparkles, Sun, Upload } from 'lucide-react'
 import { LegalSettings } from '../legal'
 import {
   checkAllConnections,
@@ -10,10 +10,20 @@ import {
   type ConnectionState,
   type DataMode,
   type HkuSite,
+  type LiveSnapshot,
   type SiteConnection,
   type ThemeMode,
 } from '../services/hku'
 import { tr, type Locale } from '../services/i18n'
+import {
+  checkGithubReleaseUpdate,
+  downloadLearningBackupJson,
+  getCurrentAppVersion,
+  restoreLocalLearningBackup,
+  serializeLearningBackup,
+  type RestoreBackupResult,
+  type UpdateCheckResult,
+} from '../services/updater'
 
 export const connectionLabel: Record<ConnectionState, string> = {
   disconnected: '未连接',
@@ -40,10 +50,14 @@ export function SettingsPage({
   setTheme,
   states,
   setStates,
+  snapshot,
+  customTasksCount = 0,
   account,
   onEditAccount,
   onSignOut,
   onNotice,
+  onRebuildCache,
+  onRestoredBackup,
 }: {
   locale?: Locale
   setLocale?: (next: Locale) => void
@@ -53,10 +67,14 @@ export function SettingsPage({
   setTheme: (theme: ThemeMode) => void
   states: Record<HkuSite, SiteConnection>
   setStates: (states: Record<HkuSite, SiteConnection>) => void
+  snapshot?: LiveSnapshot | null
+  customTasksCount?: number
   account: { username?: string; email?: string }
   onEditAccount: () => void
   onSignOut: () => Promise<void>
   onNotice: (message: string) => void
+  onRebuildCache?: (scope: 'schedule' | 'moodle') => Promise<void>
+  onRestoredBackup?: (result: RestoreBackupResult) => void
 }) {
   const [checking, setChecking] = useState<HkuSite | 'all' | null>(null)
   const [signingOut, setSigningOut] = useState(false)
@@ -65,6 +83,73 @@ export function SettingsPage({
   )
   const [minimizeToTray, setMinimizeToTray] = useState(false)
   const [traySupported, setTraySupported] = useState(() => Boolean(window.myhkuDesktop?.getDesktopPrefs))
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null)
+  const [updateError, setUpdateError] = useState('')
+  const [rebuildingScope, setRebuildingScope] = useState<'schedule' | 'moodle' | null>(null)
+  const backupFileRef = useRef<HTMLInputElement>(null)
+  const currentAppVer = getCurrentAppVersion()
+
+  const handleCheckUpdates = async () => {
+    setCheckingUpdate(true)
+    setUpdateError('')
+    try {
+      const result = await checkGithubReleaseUpdate()
+      setUpdateInfo(result)
+      onNotice(
+        result.hasUpdate
+          ? tr(locale, `发现新版本 ${result.latestTag} 可供下载`, `New release ${result.latestTag} available`)
+          : tr(locale, `当前已是最新版本 (v${result.currentVersion})`, `You are on the latest version (v${result.currentVersion})`),
+      )
+    } catch {
+      setUpdateError(tr(locale, '无法连接 GitHub Releases，请检查网络后重试', 'Unable to reach GitHub Releases; check network and retry'))
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
+
+  const handleRebuildScope = async (scope: 'schedule' | 'moodle') => {
+    if (!onRebuildCache || rebuildingScope) return
+    setRebuildingScope(scope)
+    try {
+      await onRebuildCache(scope)
+    } finally {
+      setRebuildingScope(null)
+    }
+  }
+
+  const handleExportBackup = () => {
+    const content = serializeLearningBackup(currentAppVer)
+    const stamp = new Date().toISOString().slice(0, 10)
+    downloadLearningBackupJson(content, `myhku-learning-backup-${stamp}.json`)
+    onNotice(
+      tr(
+        locale,
+        '已导出本地自建待办、GPA 模拟权重与星标资料配置 (.json)',
+        'Exported custom tasks, GPA weights & pinned resources (.json)',
+      ),
+    )
+  }
+
+  const handleImportBackupChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const rawText = await file.text()
+      const restored = restoreLocalLearningBackup(rawText, { mode: 'merge' })
+      onRestoredBackup?.(restored)
+      onNotice(
+        tr(
+          locale,
+          `备份恢复成功：合并 ${restored.taskCount} 项自建待办与 ${restored.gpaCourseCount} 门课程 GPA 配置`,
+          `Restored backup: ${restored.taskCount} custom tasks & ${restored.gpaCourseCount} GPA courses`,
+        ),
+      )
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : tr(locale, '导入备份失败', 'Failed to import backup'))
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -344,6 +429,175 @@ export function SettingsPage({
                     : tr(locale, '使用应用内提醒面板', 'In-app feed only')}
             </strong>
           </span>
+        </div>
+      </section>
+
+      <section className="panel settings-card updater-card">
+        <div className="panel-head">
+          <div>
+            <h2>
+              <Sparkles size={15} /> {tr(locale, '应用版本与更新检查', 'App Version & Update Checker')}
+            </h2>
+            <p>
+              {tr(
+                locale,
+                `当前运行版本：v${currentAppVer} · 只读查询官方 GitHub Releases 并匹配当前系统安装包`,
+                `Current version: v${currentAppVer} · Read-only check against GitHub Releases`,
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="outline-btn check-updates-btn"
+            disabled={checkingUpdate}
+            onClick={() => void handleCheckUpdates()}
+          >
+            <RefreshCw size={14} className={checkingUpdate ? 'spin' : ''} />{' '}
+            {checkingUpdate ? tr(locale, '正在检查…', 'Checking…') : tr(locale, '检查新版本', 'Check for Updates')}
+          </button>
+        </div>
+        {updateError && (
+          <div className="settings-status-row">
+            <span className="urgent-text">{updateError}</span>
+          </div>
+        )}
+        {updateInfo && (
+          <div className="update-result-box">
+            <div className="update-result-head">
+              <strong>
+                {updateInfo.hasUpdate
+                  ? tr(locale, `发现新版本：${updateInfo.latestTag}`, `Update available: ${updateInfo.latestTag}`)
+                  : tr(locale, `当前已是最新版本 (${updateInfo.latestTag})`, `Up to date (${updateInfo.latestTag})`)}
+              </strong>
+              {updateInfo.publishedAt && (
+                <small>{new Date(updateInfo.publishedAt).toLocaleDateString(locale === 'en' ? 'en-US' : 'zh-CN')}</small>
+              )}
+            </div>
+            {updateInfo.summary && <p className="update-summary-text">{updateInfo.summary}</p>}
+            <div className="update-result-actions">
+              {updateInfo.recommendedAsset && (
+                <a
+                  href={updateInfo.recommendedAsset.downloadUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="primary-btn update-download-link"
+                >
+                  <Download size={13} />{' '}
+                  {tr(locale, `下载安装包 (${updateInfo.recommendedAsset.name})`, `Download (${updateInfo.recommendedAsset.name})`)}
+                </a>
+              )}
+              {updateInfo.checksumAsset && (
+                <a href={updateInfo.checksumAsset.downloadUrl} target="_blank" rel="noreferrer" className="outline-btn">
+                  SHA256SUMS.txt <ExternalLink size={12} />
+                </a>
+              )}
+              <a href={updateInfo.htmlUrl} target="_blank" rel="noreferrer" className="outline-btn">
+                {tr(locale, '查看 Release 详情', 'Release Notes')} <ExternalLink size={12} />
+              </a>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="panel settings-card diagnostics-card">
+        <div className="panel-head">
+          <div>
+            <h2>
+              <Activity size={15} /> {tr(locale, '同步健康诊断与分区缓存自愈', 'Sync Health Diagnostics & Selective Cache Rebuild')}
+            </h2>
+            <p>
+              {tr(
+                locale,
+                '无需退出登录即可按模块单独清理并重新拉取课表或 Moodle 数据，保留其余缓存与个人设置。',
+                'Selectively rebuild timetable or Moodle cache without signing out or losing personal settings.',
+              )}
+            </p>
+          </div>
+          {onRebuildCache && (
+            <div className="account-manage-actions">
+              <button
+                type="button"
+                className="outline-btn"
+                disabled={rebuildingScope !== null}
+                onClick={() => void handleRebuildScope('schedule')}
+              >
+                <RefreshCw size={13} className={rebuildingScope === 'schedule' ? 'spin' : ''} />{' '}
+                {tr(locale, '仅重建课表缓存', 'Rebuild Timetable Cache')}
+              </button>
+              <button
+                type="button"
+                className="outline-btn"
+                disabled={rebuildingScope !== null}
+                onClick={() => void handleRebuildScope('moodle')}
+              >
+                <RefreshCw size={13} className={rebuildingScope === 'moodle' ? 'spin' : ''} />{' '}
+                {tr(locale, '仅重抓 Moodle 状态', 'Rebuild Moodle Cache')}
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="diag-metrics-grid">
+          <div className="diag-metric">
+            <small>{tr(locale, '已连接服务', 'Connected Services')}</small>
+            <strong>{Object.values(states).filter(s => s.state === 'connected').length} / 3</strong>
+          </div>
+          <div className="diag-metric">
+            <small>{tr(locale, '已缓存课表周数', 'Cached Weeks')}</small>
+            <strong>{snapshot ? snapshot.scheduleWeeks?.length || (snapshot.scheduleWeek ? 1 : 0) : 0}</strong>
+          </div>
+          <div className="diag-metric">
+            <small>{tr(locale, '课表课堂记录', 'Class Sessions')}</small>
+            <strong>{snapshot ? snapshot.schedule.length : 0}</strong>
+          </div>
+          <div className="diag-metric">
+            <small>{tr(locale, 'Moodle 课程 / 资料', 'Courses / Files')}</small>
+            <strong>
+              {snapshot ? snapshot.courses.length : 0} / {snapshot ? snapshot.resources.length : 0}
+            </strong>
+          </div>
+          <div className="diag-metric">
+            <small>{tr(locale, '官方作业 / 自建日程', 'Official / Custom Tasks')}</small>
+            <strong>
+              {snapshot ? snapshot.assignments.length : 0} / {customTasksCount}
+            </strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel settings-card backup-card">
+        <div className="panel-head">
+          <div>
+            <h2>
+              <DatabaseBackup size={15} /> {tr(locale, '本地学习配置备份与恢复 (JSON)', 'Local Learning Config Backup & Restore (JSON)')}
+            </h2>
+            <p>
+              {tr(
+                locale,
+                '一键导出或合并恢复个人自建考试倒计时、HKU 4.3 GPA 模拟权重与星标资料；不包含账号密码或会话 Cookie。',
+                'Export or merge-restore custom tasks, GPA weights, and pinned files; never includes passwords or cookies.',
+              )}
+            </p>
+          </div>
+          <div className="account-manage-actions">
+            <button type="button" className="outline-btn export-backup-btn" onClick={handleExportBackup}>
+              <Download size={14} /> {tr(locale, '导出配置 (.json)', 'Export (.json)')}
+            </button>
+            <button
+              type="button"
+              className="outline-btn import-backup-btn"
+              onClick={() => backupFileRef.current?.click()}
+            >
+              <Upload size={14} /> {tr(locale, '导入恢复 (.json)', 'Import (.json)')}
+            </button>
+            <input
+              ref={backupFileRef}
+              type="file"
+              accept=".json,application/json"
+              className="sr-only"
+              aria-label={tr(locale, '选择学习配置备份 JSON 文件', 'Select learning backup JSON file')}
+              onChange={e => void handleImportBackupChange(e)}
+            />
+          </div>
         </div>
       </section>
 

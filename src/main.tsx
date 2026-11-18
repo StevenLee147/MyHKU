@@ -47,6 +47,7 @@ import {
   cacheSnapshot,
   checkAllConnections,
   clearConnections,
+  clearSnapshotScope,
   fetchLiveSnapshot,
   getCachedSnapshot,
   getConnectionStates,
@@ -867,10 +868,36 @@ function App() {
               }}
               states={connections}
               setStates={setConnections}
+              snapshot={activeSnapshot}
+              customTasksCount={customTasks.length}
               account={account}
               onEditAccount={() => setEditingAccount(true)}
               onSignOut={handleSignOut}
               onNotice={msg => showToast(msg, 4000)}
+              onRebuildCache={async scope => {
+                const remaining = await clearSnapshotScope(scope)
+                setLiveSnapshot(remaining)
+                if (dataMode === 'live') {
+                  sync(true)
+                } else {
+                  showToast(
+                    scope === 'schedule'
+                      ? tr(locale, '已清空本地课表缓存；切换真实模式后将自动重抓', 'Cleared timetable cache')
+                      : tr(locale, '已清空本地 Moodle 缓存；切换真实模式后将自动重抓', 'Cleared Moodle cache'),
+                  )
+                }
+              }}
+              onRestoredBackup={restored => {
+                setCustomTasks(getCustomTasks())
+                if (restored.themeMode) {
+                  setThemeMode(restored.themeMode)
+                  setThemeModeState(restored.themeMode)
+                }
+                if (restored.locale) {
+                  persistLocale(restored.locale)
+                  setLocaleState(restored.locale)
+                }
+              }}
             />
           )}
         </div>

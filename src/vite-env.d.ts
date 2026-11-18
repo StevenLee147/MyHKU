@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+declare const __MYHKU_APP_VERSION__: string | undefined
 type DesktopSessions = Record<'portal' | 'sis' | 'moodle', { state: string; detail?: string; checkedAt?: string; revision?: number }>
 type DesktopDownloadResult = { count: number; paths: string[]; directory: string }
 interface Window {

@@ -336,6 +336,40 @@ export function clearConnections() {
   clearNotificationState()
 }
 
+export async function clearSnapshotScope(scope: 'schedule' | 'moodle'): Promise<LiveSnapshot | null> {
+  const existing = getCachedSnapshot()
+  let nextSnapshot: LiveSnapshot | null = null
+  if (existing) {
+    const patched: LiveSnapshot =
+      scope === 'schedule'
+        ? { ...existing, schedule: [], scheduleWeek: undefined, scheduleWeeks: undefined }
+        : { ...existing, courses: [], assignments: [], resources: [], grades: [], announcements: [] }
+    const hasRemaining =
+      patched.schedule.length > 0 ||
+      Boolean(patched.scheduleWeeks?.length) ||
+      patched.courses.length > 0 ||
+      patched.assignments.length > 0 ||
+      patched.resources.length > 0 ||
+      patched.grades.length > 0 ||
+      patched.announcements.length > 0
+    if (hasRemaining) {
+      cacheSnapshot(patched)
+      nextSnapshot = patched
+    } else {
+      try { localStorage.removeItem(SNAPSHOT_KEY) } catch { /* ignore */ }
+    }
+  }
+  if (bridgeBase) {
+    await fetch(`${bridgeBase}/api/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope }),
+      credentials: 'omit',
+    }).catch(() => {})
+  }
+  return nextSnapshot
+}
+
 export async function signOutAccount(): Promise<void> {
   if (window.myhkuDesktop?.clearAccount) {
     await window.myhkuDesktop.clearAccount()

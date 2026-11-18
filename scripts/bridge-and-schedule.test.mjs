@@ -504,3 +504,125 @@ test('findNextOrCurrentClass detects ongoing class progress and next upcoming cl
   assert.equal(upcoming.dateIso, '2026-11-19')
 })
 // end v0.3.1-beta tests
+
+test('updater compares semver, selects platform installers & checksums, and round-trips local JSON backup while rejecting secret keys', async () => {
+  const storage = new Map()
+  globalThis.localStorage = {
+    getItem: key => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, val) => storage.set(key, String(val)),
+    removeItem: key => storage.delete(key),
+  }
+  try {
+    const {
+      compareSemver,
+      checkGithubReleaseUpdate,
+      serializeLearningBackup,
+      restoreLocalLearningBackup,
+    } = await loadTsModule('src/services/updater.ts')
+
+    assert.equal(compareSemver('0.4.0-beta', '0.3.1-beta'), 1)
+    assert.equal(compareSemver('0.3.0-beta', '0.3.0-alpha'), 1)
+    assert.equal(compareSemver('1.0.0', '1.0.0-beta'), 1)
+    assert.equal(compareSemver('v0.4.0-beta', '0.4.0-beta'), 0)
+
+    const mockReleases = [
+      {
+        tag_name: 'v0.5.0-beta',
+        draft: false,
+        prerelease: true,
+        published_at: '2026-11-20T08:00:00Z',
+        html_url: 'https://github.com/StevenLee147/MyHKU/releases/tag/v0.5.0-beta',
+        body: '# MyHKU v0.5.0-beta\n\n- **New Feature**: Faster timetable sync\n',
+        assets: [
+          { name: 'MyHKU.Setup.0.5.0-beta.exe', browser_download_url: 'https://github.com/StevenLee147/MyHKU/releases/download/v0.5.0-beta/MyHKU.Setup.0.5.0-beta.exe' },
+          { name: 'MyHKU-0.5.0-beta-arm64.dmg', browser_download_url: 'https://github.com/StevenLee147/MyHKU/releases/download/v0.5.0-beta/MyHKU-0.5.0-beta-arm64.dmg' },
+          { name: 'app-release.apk', browser_download_url: 'https://github.com/StevenLee147/MyHKU/releases/download/v0.5.0-beta/app-release.apk' },
+          { name: 'SHA256SUMS.txt', browser_download_url: 'https://github.com/StevenLee147/MyHKU/releases/download/v0.5.0-beta/SHA256SUMS.txt' },
+          { name: 'untrusted.exe', browser_download_url: 'https://evil.example.test/untrusted.exe' },
+        ],
+      },
+    ]
+    const fakeFetch = async () => ({ ok: true, status: 200, json: async () => mockReleases })
+    const winCheck = await checkGithubReleaseUpdate({ currentVersion: '0.4.0-beta', platform: 'windows', fetchFn: fakeFetch })
+    assert.equal(winCheck.hasUpdate, true)
+    assert.equal(winCheck.latestVersion, '0.5.0-beta')
+    assert.equal(winCheck.recommendedAsset?.name, 'MyHKU.Setup.0.5.0-beta.exe')
+    assert.equal(winCheck.checksumAsset?.name, 'SHA256SUMS.txt')
+    assert.equal(winCheck.summary.includes('Faster timetable sync'), true)
+
+    const upToDateCheck = await checkGithubReleaseUpdate({ currentVersion: '0.5.0-beta', platform: 'macos', fetchFn: fakeFetch })
+    assert.equal(upToDateCheck.hasUpdate, false)
+    assert.equal(upToDateCheck.recommendedAsset?.name, 'MyHKU-0.5.0-beta-arm64.dmg')
+
+    // Backup & Restore round-trip
+    localStorage.setItem('myhku-custom-tasks', JSON.stringify([{ id: 't-1', title: 'GLIS1905 Final Exam', course: 'GLIS1905', category: 'exam', due: '2026-12-12 09:30', completed: false, createdAt: '2026-11-18T00:00:00Z' }]))
+    localStorage.setItem('myhku-gpa-config', JSON.stringify({ priorCgpa: '3.72', priorCredits: '60', rows: { '101': { credits: 6, grade: 'A' } }, courseWeights: { '101': { 'g1': 40 } }, targetGrades: { '101': 'A+' } }))
+    localStorage.setItem('myhku-pinned-resources', JSON.stringify(['res-1', 'res-2']))
+    localStorage.setItem('myhku-theme-mode', 'dark')
+    localStorage.setItem('myhku-locale', 'en')
+
+    const exportedJson = serializeLearningBackup('0.4.0-beta')
+    storage.clear()
+
+    const restored = restoreLocalLearningBackup(exportedJson, { mode: 'replace' })
+    assert.equal(restored.taskCount, 1)
+    assert.equal(restored.gpaCourseCount, 1)
+    assert.equal(restored.pinnedCount, 2)
+    assert.equal(restored.themeMode, 'dark')
+    assert.equal(restored.locale, 'en')
+
+    // Reject any backup containing forbidden secret keys
+    assert.throws(() => restoreLocalLearningBackup(JSON.stringify({ schema: 'myhku-learning-backup-v1', password: 'secret' })), /凭据或隐私字段/)
+  } finally {
+    delete globalThis.localStorage
+  }
+})
+
+test('bridge /api/reset supports selective schedule and moodle cache scopes without wiping the other partition', async () => {
+  const bridge = await startTestBridge()
+  try {
+    await fetch(`${bridge.baseUrl}/api/ingest/sis`, {
+      method: 'POST',
+      headers: { Origin: 'https://sweb.hku.hk', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scheduleWeek: { start: '2026-11-15', end: '2026-11-21' },
+        scheduleWeeks: [{ start: '2026-11-15', end: '2026-11-21' }],
+        schedule: [{ id: 'cls-1', title: 'GLIS1905', date: '2026-11-18', start: '09:00', end: '11:50' }],
+      }),
+    })
+    await fetch(`${bridge.baseUrl}/api/ingest/moodle`, {
+      method: 'POST',
+      headers: { Origin: 'https://moodle.hku.hk', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        courses: [{ id: 'c-1', title: 'GLIS1905', code: 'GLIS1905' }],
+        assignments: [{ id: 'a-1', title: 'Essay', course: 'GLIS1905', due: '2026-11-25 23:59', completed: false }],
+      }),
+    })
+
+    const resSched = await fetch(`${bridge.baseUrl}/api/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'schedule' }),
+    })
+    assert.equal(resSched.status, 200)
+    let snap = await (await fetch(`${bridge.baseUrl}/api/snapshot`)).json()
+    assert.equal(snap.schedule.length, 0)
+    assert.equal(snap.scheduleWeeks.length, 0)
+    assert.equal(snap.courses.length, 1, 'Moodle courses preserved when clearing schedule only')
+    assert.equal(snap.assignments.length, 1, 'Moodle assignments preserved when clearing schedule only')
+
+    const resMoodle = await fetch(`${bridge.baseUrl}/api/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'moodle' }),
+    })
+    assert.equal(resMoodle.status, 200)
+    snap = await (await fetch(`${bridge.baseUrl}/api/snapshot`)).json()
+    assert.equal(snap.courses.length, 0)
+    assert.equal(snap.assignments.length, 0)
+    assert.equal(snap.fetchedAt, null)
+  } finally {
+    await bridge.close()
+  }
+})
+// end v0.4.0-beta tests

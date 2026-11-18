@@ -393,8 +393,28 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'POST' && url.pathname === '/api/reset') {
     if (origin && !isLocalOrigin(origin)) { send(res, 403, { error: 'origin_not_allowed' }, origin); return }
-    resetBridgeState()
-    send(res, 200, { ok: true }, origin); return
+    let scope = 'all'
+    try {
+      const raw = await readBody(req)
+      if (raw && raw.trim()) {
+        const parsed = JSON.parse(raw)
+        if (parsed?.scope === 'schedule' || parsed?.scope === 'moodle') scope = parsed.scope
+      }
+    } catch { /* empty or non-JSON body defaults to full reset */ }
+    if (scope === 'schedule') {
+      snapshot.scheduleWeek = null
+      snapshot.scheduleWeeks = []
+      snapshot.schedule = []
+      if (!ARRAY_FIELDS.some(field => snapshot[field].length > 0)) snapshot.fetchedAt = null
+      saveEncryptedCache()
+    } else if (scope === 'moodle') {
+      for (const field of ['courses', 'assignments', 'resources', 'grades', 'announcements']) snapshot[field] = []
+      if (snapshot.schedule.length === 0 && snapshot.scheduleWeeks.length === 0) snapshot.fetchedAt = null
+      saveEncryptedCache()
+    } else {
+      resetBridgeState()
+    }
+    send(res, 200, { ok: true, scope }, origin); return
   }
   const ingestMatch = url.pathname.match(/^\/api\/ingest\/(portal|sis|moodle)$/)
   if (req.method === 'POST' && ingestMatch) {
