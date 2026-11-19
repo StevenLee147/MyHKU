@@ -1496,46 +1496,200 @@ nav button.active svg {
   flex-wrap: wrap;
 }
 
+:root {
+  --tt-today-col: rgba(15, 108, 120, 0.035);
+  --tt-weekend-col: rgba(18, 38, 58, 0.014);
+  --tt-0-bg: #eef7f3;
+  --tt-0-border: #c6e3d5;
+  --tt-0-accent: #1b7a53;
+  --tt-0-ink: #133a29;
+  --tt-0-sub: #2d6249;
+  --tt-1-bg: #eef4fc;
+  --tt-1-border: #c7daf3;
+  --tt-1-accent: #2563b8;
+  --tt-1-ink: #16335c;
+  --tt-1-sub: #35588a;
+  --tt-2-bg: #fcf5ea;
+  --tt-2-border: #edd6b3;
+  --tt-2-accent: #b86c19;
+  --tt-2-ink: #4b2d0b;
+  --tt-2-sub: #7a4e1d;
+  --tt-3-bg: #f4f0fb;
+  --tt-3-border: #d7cbef;
+  --tt-3-accent: #6d48b5;
+  --tt-3-ink: #301e54;
+  --tt-3-sub: #563c88;
+  --tt-4-bg: #fcf0ef;
+  --tt-4-border: #eec9c6;
+  --tt-4-accent: #be4642;
+  --tt-4-ink: #521c1a;
+  --tt-4-sub: #823735;
+  --tt-5-bg: #ecf6f8;
+  --tt-5-border: #c0e0e6;
+  --tt-5-accent: #197585;
+  --tt-5-ink: #123b43;
+  --tt-5-sub: #2c606a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tt-today-col: rgba(29, 138, 153, 0.08);
+    --tt-weekend-col: rgba(8, 16, 28, 0.24);
+    --tt-0-bg: rgba(34, 154, 96, 0.17);
+    --tt-0-border: rgba(72, 199, 134, 0.3);
+    --tt-0-accent: #4cc38a;
+    --tt-0-ink: #e4f6ed;
+    --tt-0-sub: #a9dbc0;
+    --tt-1-bg: rgba(56, 130, 232, 0.17);
+    --tt-1-border: rgba(98, 162, 248, 0.3);
+    --tt-1-accent: #68a6f8;
+    --tt-1-ink: #e4effc;
+    --tt-1-sub: #afc9ee;
+    --tt-2-bg: rgba(217, 138, 43, 0.17);
+    --tt-2-border: rgba(238, 173, 88, 0.3);
+    --tt-2-accent: #eab058;
+    --tt-2-ink: #faeedc;
+    --tt-2-sub: #e0c396;
+    --tt-3-bg: rgba(142, 102, 224, 0.17);
+    --tt-3-border: rgba(175, 142, 242, 0.3);
+    --tt-3-accent: #b08ef4;
+    --tt-3-ink: #f0eafc;
+    --tt-3-sub: #ccbbee;
+    --tt-4-bg: rgba(216, 88, 84, 0.17);
+    --tt-4-border: rgba(240, 128, 124, 0.3);
+    --tt-4-accent: #ef8683;
+    --tt-4-ink: #fce9e8;
+    --tt-4-sub: #e6b5b3;
+    --tt-5-bg: rgba(34, 152, 172, 0.17);
+    --tt-5-border: rgba(82, 194, 212, 0.3);
+    --tt-5-accent: #52c2d4;
+    --tt-5-ink: #e2f5f8;
+    --tt-5-sub: #a6d8e1;
+  }
+}
+
+:root[data-theme="dark"] {
+  --tt-today-col: rgba(29, 138, 153, 0.08);
+  --tt-weekend-col: rgba(8, 16, 28, 0.24);
+  --tt-0-bg: rgba(34, 154, 96, 0.17);
+  --tt-0-border: rgba(72, 199, 134, 0.3);
+  --tt-0-accent: #4cc38a;
+  --tt-0-ink: #e4f6ed;
+  --tt-0-sub: #a9dbc0;
+  --tt-1-bg: rgba(56, 130, 232, 0.17);
+  --tt-1-border: rgba(98, 162, 248, 0.3);
+  --tt-1-accent: #68a6f8;
+  --tt-1-ink: #e4effc;
+  --tt-1-sub: #afc9ee;
+  --tt-2-bg: rgba(217, 138, 43, 0.17);
+  --tt-2-border: rgba(238, 173, 88, 0.3);
+  --tt-2-accent: #eab058;
+  --tt-2-ink: #faeedc;
+  --tt-2-sub: #e0c396;
+  --tt-3-bg: rgba(142, 102, 224, 0.17);
+  --tt-3-border: rgba(175, 142, 242, 0.3);
+  --tt-3-accent: #b08ef4;
+  --tt-3-ink: #f0eafc;
+  --tt-3-sub: #ccbbee;
+  --tt-4-bg: rgba(216, 88, 84, 0.17);
+  --tt-4-border: rgba(240, 128, 124, 0.3);
+  --tt-4-accent: #ef8683;
+  --tt-4-ink: #fce9e8;
+  --tt-4-sub: #e6b5b3;
+  --tt-5-bg: rgba(34, 152, 172, 0.17);
+  --tt-5-border: rgba(82, 194, 212, 0.3);
+  --tt-5-accent: #52c2d4;
+  --tt-5-ink: #e2f5f8;
+  --tt-5-sub: #a6d8e1;
+}
+
 .schedule-scroll {
   overflow-x: auto;
-  margin: 0 22px 20px;
+  overflow-y: hidden;
+  margin: 0 22px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-surface);
 }
 
 .schedule-board {
-  --hour-height: 120px;
+  --hour-height: 56px;
   display: grid;
-  grid-template-columns: 58px repeat(7, minmax(120px, 1fr));
-  grid-template-rows: 44px calc(var(--hour-height) * var(--grid-hours, 11));
-  min-width: 898px;
-  margin: 0;
-  border-top: 1px solid var(--border-color);
-  border-left: 1px solid var(--border-color);
+  grid-template-columns: 54px repeat(7, minmax(108px, 1fr));
+  grid-template-rows: 40px calc(var(--hour-height) * var(--grid-hours, 9));
+  min-width: 810px;
+  margin: 0 0 -1px;
 }
 
 .schedule-corner,
 .schedule-day-head {
-  border-right: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-subtle);
 }
 
+.schedule-corner {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 9px;
+  border-right: 1px solid var(--border-color);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
 .schedule-day-head {
-  padding: 8px 6px;
-  text-align: center;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 6px;
+  border-right: 1px solid var(--border-subtle);
+  font-size: 11.5px;
   color: var(--text-heading);
+}
+
+.schedule-day-head:nth-child(8) {
+  border-right: 0;
+}
+
+.schedule-day-name {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.schedule-day-date {
+  color: var(--text-heading);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.schedule-day-head.weekend:not(.today) .schedule-day-name,
+.schedule-day-head.weekend:not(.today) .schedule-day-date {
+  color: var(--text-muted);
 }
 
 .schedule-day-head.today {
   background: var(--accent-soft);
-  font-weight: 600;
 }
 
-.schedule-day-head small {
-  display: block;
-  color: var(--success);
-  font-size: 9px;
-  margin-top: 2px;
+.schedule-day-head.today .schedule-day-name,
+.schedule-day-head.today .schedule-day-date {
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.schedule-today-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #f4fbfd;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .schedule-time-axis {
@@ -1548,8 +1702,11 @@ nav button.active svg {
 
 .schedule-time-axis span {
   position: absolute;
-  right: 7px;
-  font-size: 9px;
+  right: 8px;
+  font-size: 10.5px;
+  line-height: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -1557,58 +1714,197 @@ nav button.active svg {
 .schedule-day-track {
   grid-row: 2;
   position: relative;
-  border-right: 1px solid var(--border-color);
-  background: repeating-linear-gradient(
+  container-type: inline-size;
+  border-right: 1px solid var(--border-subtle);
+  background-image: repeating-linear-gradient(
     to bottom,
     transparent 0,
-    transparent calc(var(--hour-height) / 2 - 1px),
-    var(--grid-half) calc(var(--hour-height) / 2 - 1px),
-    var(--grid-half) calc(var(--hour-height) / 2),
-    transparent calc(var(--hour-height) / 2),
     transparent calc(var(--hour-height) - 1px),
     var(--grid-hour) calc(var(--hour-height) - 1px),
     var(--grid-hour) var(--hour-height)
   );
 }
 
-.schedule-hour-line {
+.schedule-day-track:last-child {
+  border-right: 0;
+}
+
+.schedule-day-track.weekend {
+  background-color: var(--tt-weekend-col);
+}
+
+.schedule-day-track.today {
+  background-color: var(--tt-today-col);
+}
+
+.schedule-now-line {
   position: absolute;
   left: 0;
   right: 0;
-  border-top: 1px solid var(--grid-hour);
+  height: 1.5px;
+  background: var(--accent);
+  z-index: 4;
   pointer-events: none;
 }
 
+.schedule-now-line::before {
+  content: '';
+  position: absolute;
+  left: -3px;
+  top: -2.75px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 .schedule-event {
+  --ev-bg: var(--tt-0-bg);
+  --ev-border: var(--tt-0-border);
+  --ev-accent: var(--tt-0-accent);
+  --ev-ink: var(--tt-0-ink);
+  --ev-sub: var(--tt-0-sub);
   position: absolute;
   left: 4px;
   right: 4px;
-  overflow: auto;
-  padding: 5px 6px;
-  border: 1px solid var(--event-border);
-  border-radius: 6px;
-  background: var(--event-bg);
-  color: var(--event-text);
+  z-index: 2;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 3px 7px 3px 11px;
+  border: 1px solid var(--ev-border);
+  border-radius: 7px;
+  background: var(--ev-bg);
+  color: var(--ev-ink);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1px;
+  transition: box-shadow 0.14s ease, border-color 0.14s ease;
+}
+
+.schedule-event::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 5px;
+  bottom: 5px;
+  width: 2.5px;
+  border-radius: 999px;
+  background: var(--ev-accent);
+}
+
+.schedule-event:hover {
+  z-index: 5;
   box-shadow: var(--shadow-sm);
 }
 
-.schedule-event strong,
-.schedule-event small {
-  display: block;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  line-height: 1.35;
+.schedule-event.tone-0 {
+  --ev-bg: var(--tt-0-bg);
+  --ev-border: var(--tt-0-border);
+  --ev-accent: var(--tt-0-accent);
+  --ev-ink: var(--tt-0-ink);
+  --ev-sub: var(--tt-0-sub);
+}
+
+.schedule-event.tone-1 {
+  --ev-bg: var(--tt-1-bg);
+  --ev-border: var(--tt-1-border);
+  --ev-accent: var(--tt-1-accent);
+  --ev-ink: var(--tt-1-ink);
+  --ev-sub: var(--tt-1-sub);
+}
+
+.schedule-event.tone-2 {
+  --ev-bg: var(--tt-2-bg);
+  --ev-border: var(--tt-2-border);
+  --ev-accent: var(--tt-2-accent);
+  --ev-ink: var(--tt-2-ink);
+  --ev-sub: var(--tt-2-sub);
+}
+
+.schedule-event.tone-3 {
+  --ev-bg: var(--tt-3-bg);
+  --ev-border: var(--tt-3-border);
+  --ev-accent: var(--tt-3-accent);
+  --ev-ink: var(--tt-3-ink);
+  --ev-sub: var(--tt-3-sub);
+}
+
+.schedule-event.tone-4 {
+  --ev-bg: var(--tt-4-bg);
+  --ev-border: var(--tt-4-border);
+  --ev-accent: var(--tt-4-accent);
+  --ev-ink: var(--tt-4-ink);
+  --ev-sub: var(--tt-4-sub);
+}
+
+.schedule-event.tone-5 {
+  --ev-bg: var(--tt-5-bg);
+  --ev-border: var(--tt-5-border);
+  --ev-accent: var(--tt-5-accent);
+  --ev-ink: var(--tt-5-ink);
+  --ev-sub: var(--tt-5-sub);
 }
 
 .schedule-event strong {
-  font-size: 10px;
-  font-weight: 600;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.24;
+  color: var(--ev-ink);
+}
+
+.schedule-event.compact strong {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10.75px;
+  line-height: 1.25;
 }
 
 .schedule-event small {
-  font-size: 9px;
-  color: var(--event-sub);
-  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 9.75px;
+  line-height: 1.22;
+  font-variant-numeric: tabular-nums;
+  color: var(--ev-sub);
+  margin: 0;
+}
+
+.schedule-event.compact small {
+  font-size: 9.5px;
+  line-height: 1.2;
+}
+
+.schedule-event.regular .schedule-event-loc {
+  -webkit-line-clamp: 1;
+}
+
+.schedule-event.overlap {
+  padding: 3px 5px 3px 9.5px;
+}
+
+@container (max-width: 132px) {
+  .schedule-event {
+    padding: 3px 5px 3px 9.5px;
+  }
+  .schedule-event strong {
+    font-size: 10.5px;
+  }
+  .schedule-event small {
+    font-size: 9.25px;
+  }
 }
 
 .schedule-unplaced {

@@ -8,6 +8,48 @@ export type PlacedScheduleEvent = {
   cols: number
 }
 
+export const TIMETABLE_PIXELS_PER_HOUR = 56
+export const TIMETABLE_TONE_COUNT = 6
+
+export type ScheduleGridBounds = {
+  firstHour: number
+  lastHour: number
+}
+
+export function computeScheduleGridBounds(
+  events: ReadonlyArray<{ start: number; end: number }>,
+): ScheduleGridBounds {
+  if (!events.length) {
+    return { firstHour: 9, lastHour: 18 }
+  }
+  const earliest = Math.min(...events.map(e => Math.floor(e.start / 60)))
+  const latest = Math.max(...events.map(e => Math.ceil(e.end / 60)))
+  const firstHour = Math.max(0, Math.min(9, earliest))
+  const lastHour = Math.min(24, Math.max(firstHour + 8, Math.max(17, latest)))
+  return { firstHour, lastHour }
+}
+
+export function extractCourseKey(code?: string, title?: string): string {
+  const combined = `${code || ''} ${title || ''}`.trim()
+  const codeMatch = combined.match(/\b([A-Za-z]{4})\s*-?\s*(\d{4})\b/)
+  if (codeMatch) {
+    return `${codeMatch[1].toUpperCase()}${codeMatch[2]}`
+  }
+  return (code || title || 'course').trim().toUpperCase()
+}
+
+export function buildCourseToneMap(
+  keys: Iterable<string>,
+  paletteSize = TIMETABLE_TONE_COUNT,
+): Map<string, number> {
+  const unique = Array.from(new Set(Array.from(keys).filter(Boolean))).sort()
+  const map = new Map<string, number>()
+  unique.forEach((key, idx) => {
+    map.set(key, idx % paletteSize)
+  })
+  return map
+}
+
 export function hongKongDate(now = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now)
 }

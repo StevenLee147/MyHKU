@@ -626,3 +626,46 @@ test('bridge /api/reset supports selective schedule and moodle cache scopes with
   }
 })
 // end v0.4.0-beta tests
+
+test('computeScheduleGridBounds trims idle hours while expanding for early/evening classes and buildCourseToneMap groups lectures/labs by course code', async () => {
+  const {
+    computeScheduleGridBounds,
+    extractCourseKey,
+    buildCourseToneMap,
+    TIMETABLE_PIXELS_PER_HOUR,
+  } = await loadTsModule('src/services/schedule.ts')
+
+  assert.equal(TIMETABLE_PIXELS_PER_HOUR, 56)
+
+  // Empty week falls back cleanly to compact 09:00-18:00, and 08:30 class expands firstHour to 8
+  const emptyBounds = computeScheduleGridBounds([])
+  assert.equal(emptyBounds.firstHour, 9)
+  assert.equal(emptyBounds.lastHour, 18)
+  assert.equal(computeScheduleGridBounds([{ start: 8 * 60 + 30, end: 9 * 60 + 20 }]).firstHour, 8)
+
+  // Daytime classes 09:30-16:20 trim idle morning/evening hours to 09:00-17:00
+  const daytimeBounds = computeScheduleGridBounds([
+    { start: 9 * 60 + 30, end: 11 * 60 + 20 },
+    { start: 14 * 60 + 30, end: 16 * 60 + 20 },
+  ])
+  assert.equal(daytimeBounds.firstHour, 9)
+  assert.equal(daytimeBounds.lastHour, 17)
+
+  // Evening seminar ending 20:50 expands lastHour to 21:00
+  const eveningBounds = computeScheduleGridBounds([
+    { start: 18 * 60 + 30, end: 20 * 60 + 50 },
+  ])
+  assert.equal(eveningBounds.firstHour, 9)
+  assert.equal(eveningBounds.lastHour, 21)
+
+  // Course key extraction & deterministic tone grouping across lecture/tutorial/lab
+  assert.equal(extractCourseKey(undefined, 'COMP7901 数据科学导论'), 'COMP7901')
+  assert.equal(extractCourseKey('COMP 7901', 'Lab Group A'), 'COMP7901')
+  const toneMap = buildCourseToneMap([
+    extractCourseKey(undefined, 'COMP7901 数据科学导论'),
+    extractCourseKey(undefined, 'COMP7901 Lab Group A'),
+    extractCourseKey(undefined, 'CAES9920 Seminar'),
+  ])
+  assert.equal(toneMap.get('CAES9920'), 0)
+  assert.equal(toneMap.get('COMP7901'), 1)
+})

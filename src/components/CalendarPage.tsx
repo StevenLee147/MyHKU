@@ -6,10 +6,15 @@ import { tr, type Locale } from '../services/i18n'
 // calendar i18n imported
 import { cleanDueDisplay, parseDueTimestamp, sortAssignmentsByDue } from '../services/notifications'
 import {
+  TIMETABLE_PIXELS_PER_HOUR,
   baseWeekStartDate,
+  buildCourseToneMap,
   calendarDaysBetween,
+  computeScheduleGridBounds,
   currentHongKongWeekStart,
+  extractCourseKey,
   formatIsoLocalDate,
+  hongKongClockMinutes,
   hongKongDate,
   isWeekRangeCached,
   layoutDayEvents,
@@ -72,10 +77,27 @@ export function CalendarPage({
   // calendar props
   const [weekOffset, setWeekOffset] = useState(0)
   const [loadingWeek, setLoadingWeek] = useState<number | null>(null)
+  const [nowHkMins, setNowHkMins] = useState(() => hongKongClockMinutes())
   const autoSyncedWeekRef = useRef<string | null>(null)
   const frozenBaseRef = useRef<Date | null>(null)
   const liveDesktopSync = dataMode === 'live' && Boolean(window.myhkuDesktop?.changeScheduleWeek)
   const todayHkIso = hongKongDate()
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowHkMins(hongKongClockMinutes()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const toneByCourse = useMemo(() => {
+    const keys: string[] = []
+    for (const c of snapshot.courses) {
+      keys.push(extractCourseKey(c.code, c.title))
+    }
+    for (const s of snapshot.schedule) {
+      keys.push(extractCourseKey(s.code, s.title))
+    }
+    return buildCourseToneMap(keys)
+  }, [snapshot.courses, snapshot.schedule])
   const baseStart = useMemo(() => {
     if (liveDesktopSync) return currentHongKongWeekStart()
     if (weekOffset === 0 || !frozenBaseRef.current) {
@@ -170,14 +192,15 @@ export function CalendarPage({
     await syncTargetWeek(delta, targetStartIso)
   }
 
-  const formatDay = (day: Date) =>
-    new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'zh-CN', { weekday: 'short', month: 'numeric', day: 'numeric' }).format(day)
+  const formatWeekday = (day: Date) =>
+    new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'zh-CN', { weekday: 'short' }).format(day)
+  const formatMonthDay = (day: Date) => `${day.getMonth() + 1}/${day.getDate()}`
   const allEvents = dayEvents.flat()
-  const firstHour = Math.min(8, ...allEvents.map(event => Math.floor(event.start / 60)))
-  const lastHour = Math.max(19, ...allEvents.map(event => Math.ceil(event.end / 60)))
+  const { firstHour, lastHour } = useMemo(() => computeScheduleGridBounds(allEvents), [allEvents])
   const timeLabels = Array.from({ length: lastHour - firstHour + 1 }, (_, index) => firstHour + index)
   const gridStart = firstHour * 60
-  const pixelsPerHour = 120
+  const gridEnd = lastHour * 60
+  const pixelsPerHour = TIMETABLE_PIXELS_PER_HOUR
   const cachedWeeksCount = snapshot.scheduleWeeks?.length || (snapshot.scheduleWeek ? 1 : 0)
 
   const weekDeadlines = useMemo(() => {
@@ -256,64 +279,117 @@ export function CalendarPage({
               className="schedule-board"
               style={{ '--hour-height': `${pixelsPerHour}px`, '--grid-hours': lastHour - firstHour } as CSSProperties}
             >
-              <div className="schedule-corner" />
+              <div className="schedule-corner">
+                <span>HKT</span>
+              </div>
               {days.map(day => {
                 const dayIso = formatIsoLocalDate(day)
-                const isToday = dayIso === hongKongDate()
+                const isToday = dayIso === todayHkIso
+                const isWeekend = day.getDay() === 0 || day.getDay() === 6
                 return (
-                  <div className={`schedule-day-head ${isToday ? 'today' : ''}`} key={dayIso}>
-                    {formatDay(day)}
-                    {isToday ? <small>今天</small> : null}
+                  <div
+                    className={`schedule-day-head ${isToday ? 'today' : ''} ${isWeekend ? 'weekend' : ''}`}
+                    key={dayIso}
+                  >
+                    <span className="schedule-day-name">{formatWeekday(day)}</span>
+                    <span className="schedule-day-date">{formatMonthDay(day)}</span>
+                    {isToday ? <small className="schedule-today-pill">{tr(locale, '今天', 'Today')}</small> : null}
                   </div>
                 )
               })}
               <div className="schedule-time-axis">
-                {timeLabels.map(hour => (
-                  <span key={hour} style={{ top: `${(hour - firstHour) * pixelsPerHour - 8}px` }}>
-                    {`${String(hour).padStart(2, '0')}:00`}
-                  </span>
-                ))}
+                {timeLabels.map((hour, index) => {
+                  const isFirst = index === 0
+                  const isLast = index === timeLabels.length - 1
+                  const tickStyle: CSSProperties = isFirst
+                    ? { top: '3px' }
+                    : isLast
+                      ? { bottom: '3px' }
+                      : { top: `${(hour - firstHour) * pixelsPerHour - 7}px` }
+                  return (
+                    <span
+                      key={hour}
+                      className={isFirst ? 'edge-start' : isLast ? 'edge-end' : ''}
+                      style={tickStyle}
+                    >
+                      {`${String(hour).padStart(2, '0')}:00`}
+                    </span>
+                  )
+                })}
               </div>
-              {dayEvents.map((placedEvents, dayIndex) => (
-                <div className="schedule-day-track" key={formatIsoLocalDate(days[dayIndex])} style={{ gridColumn: dayIndex + 2 }}>
-                  {timeLabels.slice(0, -1).map(hour => (
-                    <i className="schedule-hour-line" key={hour} style={{ top: `${(hour - firstHour) * pixelsPerHour}px` }} />
-                  ))}
-                  {placedEvents.map(({ item, start, end, col, cols }, index) => {
-                    const widthPct = 100 / cols
-                    const leftPct = col * widthPct
-                    const positionStyle: CSSProperties =
-                      cols > 1
-                        ? {
-                            left: `calc(${leftPct}% + 3px)`,
-                            width: `calc(${widthPct}% - 6px)`,
-                            right: 'auto',
-                          }
-                        : {}
-                    return (
-                      <article
-                        className={`schedule-event ${cols > 1 ? 'overlap' : ''}`}
-                        key={item.id || `${item.title}-${index}`}
-                        style={{
-                          top: `${(Math.max(0, start - gridStart) / 60) * pixelsPerHour + 2}px`,
-                          height: `${Math.max(28, ((Math.min(lastHour * 60, end) - Math.max(gridStart, start)) / 60) * pixelsPerHour - 4)}px`,
-                          ...positionStyle,
-                        }}
-                        title={`${item.title}${item.teacher ? ` · ${item.teacher}` : ''} · ${item.room || '未提供地点'}`}
-                      >
-                        <strong>{item.title}</strong>
-                        <small>
-                          {item.start}–{item.end}
-                        </small>
-                        <small>
-                          {item.room || '未提供地点'}
-                          {item.teacher ? ` · ${item.teacher}` : ''}
-                        </small>
-                      </article>
-                    )
-                  })}
-                </div>
-              ))}
+              {dayEvents.map((placedEvents, dayIndex) => {
+                const day = days[dayIndex]
+                const dayIso = formatIsoLocalDate(day)
+                const isToday = dayIso === todayHkIso
+                const isWeekend = day.getDay() === 0 || day.getDay() === 6
+                const showNowLine = isToday && nowHkMins >= gridStart && nowHkMins <= gridEnd
+                return (
+                  <div
+                    className={`schedule-day-track ${isToday ? 'today' : ''} ${isWeekend ? 'weekend' : ''}`}
+                    key={dayIso}
+                    style={{ gridColumn: dayIndex + 2 }}
+                  >
+                    {showNowLine && (
+                      <div
+                        className="schedule-now-line"
+                        style={{ top: `${((nowHkMins - gridStart) / 60) * pixelsPerHour}px` }}
+                        aria-hidden="true"
+                      />
+                    )}
+                    {placedEvents.map(({ item, start, end, col, cols }, index) => {
+                      const widthPct = 100 / cols
+                      const leftPct = col * widthPct
+                      const positionStyle: CSSProperties =
+                        cols > 1
+                          ? {
+                              left: `calc(${leftPct}% + 3px)`,
+                              width: `calc(${widthPct}% - 6px)`,
+                              right: 'auto',
+                            }
+                          : {}
+                      const clippedStart = Math.max(gridStart, start)
+                      const clippedEnd = Math.min(gridEnd, end)
+                      const durationMins = Math.max(30, clippedEnd - clippedStart)
+                      const isCompact = durationMins < 75
+                      const isTall = durationMins >= 105
+                      const rawHeight = ((clippedEnd - clippedStart) / 60) * pixelsPerHour
+                      const heightPx = Math.max(46, Math.round(rawHeight) - 2)
+                      const topPx = Math.round(((clippedStart - gridStart) / 60) * pixelsPerHour) + 1
+                      const tone = toneByCourse.get(extractCourseKey(item.code, item.title)) ?? 0
+                      return (
+                        <article
+                          className={`schedule-event tone-${tone} ${isCompact ? 'compact' : isTall ? 'tall' : 'regular'} ${cols > 1 ? 'overlap' : ''}`}
+                          key={item.id || `${item.title}-${index}`}
+                          style={{
+                            top: `${topPx}px`,
+                            height: `${heightPx}px`,
+                            ...positionStyle,
+                          }}
+                          title={`${item.title}${item.teacher ? ` · ${item.teacher}` : ''} · ${item.room || tr(locale, '未提供地点', 'Location TBA')}`}
+                        >
+                          <strong>{item.title}</strong>
+                          {isCompact ? (
+                            <small className="schedule-event-meta">
+                              {item.start}–{item.end}
+                              {item.room ? ` · ${item.room}` : ''}
+                            </small>
+                          ) : (
+                            <>
+                              <small className="schedule-event-time">
+                                {item.start}–{item.end}
+                              </small>
+                              <small className="schedule-event-loc">
+                                {item.room || tr(locale, '待定教室', 'TBA')}
+                                {isTall && item.teacher && cols === 1 ? ` · ${item.teacher}` : ''}
+                              </small>
+                            </>
+                          )}
+                        </article>
+                      )
+                    })}
+                  </div>
+                )
+              })}
             </div>
           </div>
           {unplaced.length > 0 && <p className="empty-state schedule-unplaced">{unplaced.length} 节课程缺少可定位的日期或时间</p>}

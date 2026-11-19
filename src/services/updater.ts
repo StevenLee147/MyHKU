@@ -59,7 +59,7 @@ export function getCurrentAppVersion(): string {
   if (typeof __MYHKU_APP_VERSION__ === 'string' && __MYHKU_APP_VERSION__.trim()) {
     return __MYHKU_APP_VERSION__.trim().replace(/^v/i, '')
   }
-  return '0.4.0-beta'
+  return '0.4.1-beta'
 }
 
 type ParsedSemver = {
