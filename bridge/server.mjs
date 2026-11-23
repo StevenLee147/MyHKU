@@ -238,7 +238,25 @@ function normalizeCourse(item, index) {
   if (!item || typeof item !== 'object') return null
   const title = clean(item.title || item.name)
   if (!title) return null
-  return { id: idOf(item.id, `course-${index}-${title}`), title, ...(clean(item.code) ? { code: clean(item.code, 80) } : {}) }
+  const url = safeUrl(item.url || item.href)
+  const isSubclass = bool(item.isSubclass)
+  const isNonAcademic = bool(item.isNonAcademic)
+  const moodleHidden = bool(item.moodleHidden)
+  const starred = bool(item.starred)
+  return {
+    id: idOf(item.id, `course-${index}-${title}`),
+    title,
+    ...(clean(item.code) ? { code: clean(item.code, 80) } : {}),
+    ...(clean(item.shortname) ? { shortname: clean(item.shortname, 120) } : {}),
+    ...(clean(item.category) ? { category: clean(item.category, 160) } : {}),
+    ...(clean(item.section) ? { section: clean(item.section, 60) } : {}),
+    ...(clean(item.term) ? { term: clean(item.term, 60) } : {}),
+    ...(url ? { url } : {}),
+    ...(isSubclass === undefined ? {} : { isSubclass }),
+    ...(isNonAcademic === undefined ? {} : { isNonAcademic }),
+    ...(moodleHidden === undefined ? {} : { moodleHidden }),
+    ...(starred === undefined ? {} : { starred }),
+  }
 }
 
 function sanitizeBridgeDue(raw) {
@@ -267,7 +285,8 @@ function normalizeAssignment(item, index) {
   const status = clean(item.submissionStatus, 160)
   const due = sanitizeBridgeDue(item.due)
   const completed = inferCompletedFromStatus(status, bool(item.completed))
-  return { id: idOf(item.id, `assignment-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(completed === undefined ? {} : { completed }) }
+  const courseId = clean(item.courseId, 80)
+  return { id: idOf(item.id, `assignment-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(completed === undefined ? {} : { completed }) }
 }
 
 function normalizeResource(item, index) {
@@ -275,14 +294,16 @@ function normalizeResource(item, index) {
   const title = clean(item.title || item.name)
   const url = safeUrl(item.url || item.href)
   if (!title || !url) return null
-  return { id: idOf(item.id, `resource-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', url }
+  const courseId = clean(item.courseId, 80)
+  return { id: idOf(item.id, `resource-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), url }
 }
 
 function normalizeGrade(item, index) {
   if (!item || typeof item !== 'object') return null
   const title = clean(item.title || item.name)
   if (!title) return null
-  return { id: idOf(item.id, `grade-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(clean(item.value || item.grade || item.score) ? { value: clean(item.value || item.grade || item.score, 80) } : {}), ...(typeof item.released === 'boolean' ? { released: item.released } : {}) }
+  const courseId = clean(item.courseId, 80)
+  return { id: idOf(item.id, `grade-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), ...(clean(item.value || item.grade || item.score) ? { value: clean(item.value || item.grade || item.score, 80) } : {}), ...(typeof item.released === 'boolean' ? { released: item.released } : {}) }
 }
 
 function normalizeAnnouncement(item, index) {
@@ -291,10 +312,12 @@ function normalizeAnnouncement(item, index) {
   if (!title) return null
   const published = clean(item.published || item.date || item.time)
   const url = safeUrl(item.url || item.href)
+  const courseId = clean(item.courseId, 80)
   return {
     id: idOf(item.id, `announcement-${index}-${title}`),
     title,
     course: clean(item.course || item.courseName, 180) || '未提供课程',
+    ...(courseId ? { courseId } : {}),
     ...(published ? { published: published.slice(0, 120) } : {}),
     ...(url ? { url } : {}),
   }
@@ -330,14 +353,19 @@ function mergeById(existing, incoming, field) {
       const submissionStatus = item.submissionStatus || prev.submissionStatus
       const completed = item.completed !== undefined ? item.completed : prev.completed
       const course = (item.course && item.course !== '未提供课程') ? item.course : (prev.course || '未提供课程')
+      const courseId = item.courseId || prev.courseId
       merged.set(id, {
         id,
         title: item.title || prev.title,
         course,
+        ...(courseId ? { courseId } : {}),
         ...(due ? { due } : {}),
         ...(submissionStatus ? { submissionStatus } : {}),
         ...(completed !== undefined ? { completed } : {}),
       })
+    } else if (prev && field === 'courses') {
+      const title = item.title && (!prev.title || item.title.length >= prev.title.length) ? item.title : prev.title
+      merged.set(id, { ...prev, ...item, id, title })
     } else {
       merged.set(id, { ...prev, ...item, id })
     }

@@ -2,6 +2,7 @@ import type { CustomTask, CustomTaskCategory } from './customTasks'
 import type { GpaStoredConfig, HkuGradeLetter } from './gpa'
 import type { ThemeMode } from './hku'
 import type { Locale } from './i18n'
+import type { MoodleCoursePrefs } from './moodleCourses'
 
 export type RuntimePlatform = 'windows' | 'macos' | 'android' | 'web'
 
@@ -31,6 +32,7 @@ export type LearningBackupPayload = {
   customTasks: CustomTask[]
   gpaConfig: GpaStoredConfig
   pinnedResources: string[]
+  moodleCoursePrefs?: MoodleCoursePrefs
   themeMode?: ThemeMode
   locale?: Locale
 }
@@ -39,6 +41,7 @@ export type RestoreBackupResult = {
   taskCount: number
   gpaCourseCount: number
   pinnedCount: number
+  moodleCoursePrefs?: MoodleCoursePrefs
   themeMode?: ThemeMode
   locale?: Locale
 }
@@ -49,8 +52,42 @@ const RELEASES_WEB_URL = 'https://github.com/StevenLee147/MyHKU/releases'
 const CUSTOM_TASKS_KEY = 'myhku-custom-tasks'
 const GPA_CONFIG_KEY = 'myhku-gpa-config'
 const PINNED_RESOURCES_KEY = 'myhku-pinned-resources'
+const MOODLE_COURSE_PREFS_KEY = 'myhku-moodle-course-prefs'
 const THEME_KEY = 'myhku-theme-mode'
 const LOCALE_KEY = 'myhku-locale'
+
+function sanitizeMoodleCoursePrefs(raw: unknown): MoodleCoursePrefs {
+  const cleanIds = (v: unknown) =>
+    Array.isArray(v) ? [...new Set(v.map(x => String(x || '').trim().slice(0, 120)).filter(Boolean))].slice(0, 300) : []
+  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const hiddenCourseIds = cleanIds(obj.hiddenCourseIds)
+  const hiddenSet = new Set(hiddenCourseIds)
+  return {
+    hiddenCourseIds,
+    shownCourseIds: cleanIds(obj.shownCourseIds).filter(id => !hiddenSet.has(id)),
+    pinnedCourseIds: cleanIds(obj.pinnedCourseIds),
+    autoHideSubclasses: Boolean(obj.autoHideSubclasses),
+    autoHideNonAcademic: Boolean(obj.autoHideNonAcademic),
+  }
+}
+
+function getMoodleCoursePrefs(): MoodleCoursePrefs {
+  if (typeof localStorage === 'undefined') return sanitizeMoodleCoursePrefs({})
+  try {
+    const raw = localStorage.getItem(MOODLE_COURSE_PREFS_KEY)
+    return raw ? sanitizeMoodleCoursePrefs(JSON.parse(raw)) : sanitizeMoodleCoursePrefs({})
+  } catch {
+    return sanitizeMoodleCoursePrefs({})
+  }
+}
+
+function saveMoodleCoursePrefs(next: MoodleCoursePrefs): MoodleCoursePrefs {
+  const cleaned = sanitizeMoodleCoursePrefs(next)
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(MOODLE_COURSE_PREFS_KEY, JSON.stringify(cleaned))
+  }
+  return cleaned
+}
 
 const VALID_GRADES = new Set<string>(['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D+', 'D', 'F', 'P'])
 const VALID_TARGET_GRADES = new Set<string>(['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D+', 'D'])
@@ -59,7 +96,7 @@ export function getCurrentAppVersion(): string {
   if (typeof __MYHKU_APP_VERSION__ === 'string' && __MYHKU_APP_VERSION__.trim()) {
     return __MYHKU_APP_VERSION__.trim().replace(/^v/i, '')
   }
-  return '0.4.1-beta'
+  return '0.4.2-beta'
 }
 
 type ParsedSemver = {
@@ -360,6 +397,8 @@ export function buildLocalLearningBackup(currentVersion = getCurrentAppVersion()
     if (l === 'zh' || l === 'en') locale = l
   } catch { /* ignore */ }
 
+  const moodleCoursePrefs = getMoodleCoursePrefs()
+
   return {
     schema: 'myhku-learning-backup-v1',
     exportedAt: new Date().toISOString(),
@@ -367,6 +406,7 @@ export function buildLocalLearningBackup(currentVersion = getCurrentAppVersion()
     customTasks,
     gpaConfig,
     pinnedResources,
+    moodleCoursePrefs,
     ...(themeMode ? { themeMode } : {}),
     ...(locale ? { locale } : {}),
   }
@@ -456,6 +496,23 @@ export function restoreLocalLearningBackup(
   localStorage.setItem(GPA_CONFIG_KEY, JSON.stringify(finalGpa))
   localStorage.setItem(PINNED_RESOURCES_KEY, JSON.stringify(finalPinned))
 
+  let restoredCoursePrefs: MoodleCoursePrefs | undefined
+  if (obj.moodleCoursePrefs && typeof obj.moodleCoursePrefs === 'object') {
+    const incomingPrefs = sanitizeMoodleCoursePrefs(obj.moodleCoursePrefs)
+    if (mode === 'merge') {
+      const currentPrefs = getMoodleCoursePrefs()
+      restoredCoursePrefs = saveMoodleCoursePrefs({
+        hiddenCourseIds: [...new Set([...currentPrefs.hiddenCourseIds, ...incomingPrefs.hiddenCourseIds])],
+        shownCourseIds: [...new Set([...currentPrefs.shownCourseIds, ...incomingPrefs.shownCourseIds])],
+        pinnedCourseIds: [...new Set([...currentPrefs.pinnedCourseIds, ...incomingPrefs.pinnedCourseIds])],
+        autoHideSubclasses: incomingPrefs.autoHideSubclasses || currentPrefs.autoHideSubclasses,
+        autoHideNonAcademic: incomingPrefs.autoHideNonAcademic || currentPrefs.autoHideNonAcademic,
+      })
+    } else {
+      restoredCoursePrefs = saveMoodleCoursePrefs(incomingPrefs)
+    }
+  }
+
   const themeMode: ThemeMode | undefined =
     obj.themeMode === 'light' || obj.themeMode === 'dark' || obj.themeMode === 'system' ? obj.themeMode : undefined
   const locale: Locale | undefined = obj.locale === 'zh' || obj.locale === 'en' ? obj.locale : undefined
@@ -466,6 +523,7 @@ export function restoreLocalLearningBackup(
     taskCount: finalTasks.length,
     gpaCourseCount: Object.keys(finalGpa.rows).length,
     pinnedCount: finalPinned.length,
+    ...(restoredCoursePrefs ? { moodleCoursePrefs: restoredCoursePrefs } : {}),
     ...(themeMode ? { themeMode } : {}),
     ...(locale ? { locale } : {}),
   }

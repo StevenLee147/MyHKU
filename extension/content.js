@@ -199,28 +199,177 @@
     const mergedStatus = incoming.submissionStatus || existing.submissionStatus
     const mergedCompleted = incoming.completed !== undefined ? incoming.completed : existing.completed
     const mergedCourse = (incoming.course && incoming.course !== '未提供课程') ? incoming.course : (existing.course || '未提供课程')
+    const mergedCourseId = incoming.courseId || existing.courseId
     return {
       id: existing.id || incoming.id,
       title: incoming.title || existing.title,
       course: mergedCourse,
+      ...(mergedCourseId ? { courseId: mergedCourseId } : {}),
       ...(mergedDue ? { due: mergedDue } : {}),
       ...(mergedStatus ? { submissionStatus: mergedStatus } : {}),
       ...(mergedCompleted !== undefined ? { completed: mergedCompleted } : {}),
     }
   }
 
-  function extractMoodle() {
-    const courses = []; const courseIds = new Set()
-    document.querySelectorAll('a[href*="/course/view.php"]').forEach((link) => {
-      const title = (clean(link.textContent) || text(nearest(link), ['.coursename', '.course-title', 'h3', 'h4']))
-        .replace(/^Course image["'：:\s]*/i, '').trim()
-      if (!title) return
-      const href = linkHref(link); const root = nearest(link)
-      const id = idFrom(root, href, 'course', title)
-      if (courseIds.has(id)) return
-      courseIds.add(id); const code = attr(root, ['data-course-code']) || codeFrom(title)
-      courses.push({ id, title, ...(code ? { code } : {}) })
+  const moodleCodeFrom = (value) => {
+    const match = clean(value).match(/(?:^|[^A-Za-z0-9])([A-Z]{2,8})\s*[-_]?\s*(\d{3,5}[A-Z]?)(?=$|[^A-Za-z0-9])/i)
+    return match ? `${match[1]}${match[2]}`.toUpperCase() : ''
+  }
+  const SUBCLASS_PATTERN = /\b(?:sub[-\s]?class(?:es)?|tutorials?|labs?|laboratory|workshops?|practicums?|discussion\s+groups?|tut\s*[0-9a-z]{1,3})\b|子班|分班|辅导课|輔導課|实验课|實驗課|讨论组|討論組/i
+  const NON_ACADEMIC_PATTERN = /\b(?:orientation|anti[-\s]?plagiarism|academic\s+advising|library\s+(?:orientation|training|workshop)|safety\s+training|student\s+handbook|cedars|academic\s+integrity|turnitin\s+practice|sandbox)\b|迎新|学术诚信|學術誠信|图书馆培训|安全培训/i
+  const GENERIC_COURSE_LABEL = /^(?:course|courses|my\s+courses|all\s+courses|site\s+home|home|dashboard|general|announcements|participants|grades|competencies|more|课程|我的课程|所有课程|网站首页|主页|仪表盘|概览)$/i
+  const decodeHtmlText = (raw, max = 500) => {
+    const str = String(raw || '')
+    if (!str) return ''
+    if (!str.includes('&') && !str.includes('<')) return clean(str, max)
+    const doc = new DOMParser().parseFromString(`<!doctype html><body>${str}</body>`, 'text/html')
+    return clean(doc.body?.textContent || str, max)
+  }
+  const stripCourseSrPrefix = (raw) => clean(raw)
+    .replace(/^(?:(?:Course\s+image|Course\s+is\s+starred|Starred\s+course|Course\s+name|课程图片|課程圖片|星标课程|课程名称)(?:[\s"'：:|-]+|$))+/gi, '')
+    .trim()
+  const visibleLabelFromNode = (node) => {
+    if (!node || !node.cloneNode) return ''
+    const multilineHidden = node.querySelector?.('.multiline [aria-hidden="true"], .coursename [aria-hidden="true"]')
+    if (multilineHidden) {
+      const direct = stripCourseSrPrefix(multilineHidden.textContent)
+      if (direct) return direct
+    }
+    const clone = node.cloneNode(true)
+    clone.querySelectorAll?.('.sr-only, .accesshide, .visually-hidden').forEach(el => el.remove())
+    return stripCourseSrPrefix(clone.textContent)
+  }
+  const extractCourseMeta = (title, shortname = '', category = '') => {
+    const combined = `${shortname} ${title}`.trim()
+    const code = moodleCodeFrom(shortname) || moodleCodeFrom(title)
+    let section = ''
+    const explicitSec = combined.match(/\b(?:sub[-\s]?class|section|tutorial|lab|group)\s*[:#-]?\s*([A-Za-z0-9-]{1,8})\b/i)
+    if (explicitSec && !/^20\d{2}$/.test(explicitSec[1])) {
+      section = explicitSec[1].toUpperCase()
+    } else if (code) {
+      const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const suffixMatch = combined.match(new RegExp(`(?:^|[^A-Za-z0-9])${escaped}[-_\s]+([0-9]{1,2}[A-Z]{1,3}|[A-Z][0-9]{1,2})(?=$|[^A-Za-z0-9])`, 'i'))
+      if (suffixMatch && !/^20\d{2}$/.test(suffixMatch[1])) section = suffixMatch[1].toUpperCase()
+    }
+    const termMatch = combined.match(/(?:^|[^A-Za-z0-9])(20\d{2}\s*[-/]\s*(?:20)?\d{2}(?:\s*Sem(?:ester)?\s*[12A-Za-z]+)?|20\d{2}\s*Sem(?:ester)?\s*[12A-Za-z]+|20\d{2})(?=$|[^A-Za-z0-9])/i)
+    const term = termMatch ? clean(termMatch[1], 40) : ''
+    const isSubclass = SUBCLASS_PATTERN.test(combined)
+    const isNonAcademic = NON_ACADEMIC_PATTERN.test(`${combined} ${category}`)
+    return { code, section, term, isSubclass, isNonAcademic }
+  }
+  const finalizeCourseList = (courses) => {
+    const byCode = new Map()
+    for (const c of courses) {
+      if (!c.code) continue
+      const group = byCode.get(c.code) || []
+      group.push(c)
+      byCode.set(c.code, group)
+    }
+    return courses.map(c => {
+      let isSubclass = Boolean(c.isSubclass)
+      if (!isSubclass && c.code && c.section) {
+        const siblings = byCode.get(c.code) || []
+        const sameYear = (a, b) => !a || !b || String(a).slice(0, 4) === String(b).slice(0, 4)
+        const hasMainShell = siblings.some(other => other.id !== c.id && sameYear(c.term, other.term) && (!other.section || /\b(?:combined|all\s+sections|master|main)\b/i.test(other.title)))
+        if (hasMainShell) isSubclass = true
+      }
+      return {
+        ...c,
+        ...(isSubclass ? { isSubclass: true } : {}),
+      }
     })
+  }
+
+  function extractCoursesFromDocument(doc, baseUrl) {
+    const coursesMap = new Map()
+    const putCourse = (entry) => {
+      if (!entry || !entry.id || !entry.title || entry.id === '1') return
+      if (GENERIC_COURSE_LABEL.test(entry.title)) return
+      const prev = coursesMap.get(entry.id)
+      if (!prev) {
+        coursesMap.set(entry.id, entry)
+        return
+      }
+      const betterTitle = entry.title.length > prev.title.length ? entry.title : prev.title
+      coursesMap.set(entry.id, {
+        ...prev,
+        ...entry,
+        title: betterTitle,
+        code: entry.code || prev.code || undefined,
+        shortname: entry.shortname || prev.shortname || undefined,
+        category: entry.category || prev.category || undefined,
+        section: entry.section || prev.section || undefined,
+        term: entry.term || prev.term || undefined,
+        url: entry.url || prev.url || undefined,
+      })
+    }
+    try {
+      const parsedBase = new URL(baseUrl)
+      if (/\/course\/(?:view|overview)\.php$/i.test(parsedBase.pathname) && parsedBase.searchParams.get('id')) {
+        const cid = parsedBase.searchParams.get('id')
+        const heading = stripCourseSrPrefix(doc.querySelector('h1, .page-header-headings')?.textContent)
+        if (cid && cid !== '1' && heading && !GENERIC_COURSE_LABEL.test(heading)) {
+          const meta = extractCourseMeta(heading)
+          putCourse({
+            id: cid,
+            title: heading,
+            url: `${parsedBase.origin}/course/view.php?id=${encodeURIComponent(cid)}`,
+            ...(meta.code ? { code: meta.code } : {}),
+            ...(meta.section ? { section: meta.section } : {}),
+            ...(meta.term ? { term: meta.term } : {}),
+            ...(meta.isSubclass ? { isSubclass: true } : {}),
+            ...(meta.isNonAcademic ? { isNonAcademic: true } : {}),
+          })
+        }
+      }
+    } catch (_) { /* ignore malformed baseUrl */ }
+
+    doc.querySelectorAll('a[href*="/course/view.php"]').forEach((link) => {
+      const rawHref = link.getAttribute('href') || ''
+      if (/#section-\d+/i.test(rawHref)) return
+      const href = pageHref(link, baseUrl)
+      if (!href) return
+      let parsedHref
+      try {
+        parsedHref = new URL(href)
+        if (parsedHref.searchParams.has('section')) return
+      } catch (_) { return }
+      const root = link.closest('[data-region="course-content"], tr, article, li, .coursebox, .course-listitem, .course-card') || nearest(link)
+      const rawTitle =
+        visibleLabelFromNode(link) ||
+        visibleLabelFromNode(root.querySelector?.('.coursename, .course-title, [data-region="course-content"] .multiline')) ||
+        stripCourseSrPrefix(text(root, ['.coursename', '.course-title', 'h3', 'h4'])) ||
+        stripCourseSrPrefix(link.getAttribute('title') || link.getAttribute('aria-label'))
+      if (!rawTitle || GENERIC_COURSE_LABEL.test(rawTitle)) return
+      const id = idFrom(root, href, 'course', rawTitle)
+      if (!id || id === '1') return
+      const shortname = attr(root, ['data-course-shortname', 'data-shortname'])
+      const category = text(root, ['.categoryname', '[data-region="course-category"]'])
+      const meta = extractCourseMeta(rawTitle, shortname, category)
+      const code = attr(root, ['data-course-code']) || meta.code
+      const canonicalUrl = parsedHref.searchParams.get('id')
+        ? `${parsedHref.origin}/course/view.php?id=${encodeURIComponent(parsedHref.searchParams.get('id'))}`
+        : href
+      const starred = Boolean(root.querySelector?.('[data-region="is-favourite"]:not(.hidden), .fa-star:not(.d-none)'))
+      putCourse({
+        id,
+        title: rawTitle,
+        url: canonicalUrl,
+        ...(code ? { code } : {}),
+        ...(shortname ? { shortname } : {}),
+        ...(category ? { category } : {}),
+        ...(meta.section ? { section: meta.section } : {}),
+        ...(meta.term ? { term: meta.term } : {}),
+        ...(meta.isSubclass ? { isSubclass: true } : {}),
+        ...(meta.isNonAcademic ? { isNonAcademic: true } : {}),
+        ...(starred ? { starred: true } : {}),
+      })
+    })
+    return finalizeCourseList(Array.from(coursesMap.values()))
+  }
+
+  function extractMoodle() {
+    const courses = extractCoursesFromDocument(document, location.href)
 
     const assignments = []; const assignmentIds = new Set()
     const assessmentSelector = 'a[href*="/mod/assign/"], a[href*="assign/view"], a[href*="/mod/quiz/"], a[href*="/mod/turnitintooltwo/"]'
@@ -345,55 +494,228 @@
     return Array.from(map.values())
   }
 
-  // Moodle's dashboard exposes course links, while resources and forum posts
-  // live one level deeper. Read those rendered course pages through the
-  // authenticated WebView session and return only normalized visible fields.
-  async function crawlMoodleCoursePages(baseData) {
-    const links = Array.from(document.querySelectorAll('a[href*="/course/view.php"]'))
-      .map(link => pageHref(link, location.href)).filter(Boolean)
-    const current = new URL(location.href)
-    if (/\/course\/(view|overview)\.php$/.test(current.pathname) && current.searchParams.has('id')) {
-      links.push(`${current.origin}/course/view.php?id=${encodeURIComponent(current.searchParams.get('id'))}`)
+  function readPageSesskey(doc, rawHtml = '') {
+    if (doc === document && globalThis.M?.cfg?.sesskey) {
+      const direct = clean(globalThis.M.cfg.sesskey, 80)
+      if (/^[A-Za-z0-9_-]{6,64}$/.test(direct)) return direct
     }
-    const unique = Array.from(new Set(links)).slice(0, 20)
-    const cacheKey = unique.join('|')
+    const inputVal = clean(doc?.querySelector?.('input[name="sesskey"]')?.getAttribute('value') || doc?.querySelector?.('input[name="sesskey"]')?.value, 80)
+    if (/^[A-Za-z0-9_-]{6,64}$/.test(inputVal)) return inputVal
+    for (const anchor of Array.from(doc?.querySelectorAll?.('a[href*="sesskey="]') || [])) {
+      try {
+        const candidate = clean(new URL(anchor.getAttribute('href') || '', location.href).searchParams.get('sesskey'), 80)
+        if (/^[A-Za-z0-9_-]{6,64}$/.test(candidate)) return candidate
+      } catch (_) { /* ignore */ }
+    }
+    const m = (rawHtml || String(doc?.documentElement?.innerHTML || '')).match(/"sesskey"\s*:\s*"([A-Za-z0-9_-]{6,64})"/)
+    return m ? m[1] : ''
+  }
+
+  async function discoverEnrolledMoodleCourses(baseCourses) {
+    const mergedMap = new Map()
+    const mergeCourseEntry = (item) => {
+      if (!item || !item.id || !item.title || item.id === '1' || GENERIC_COURSE_LABEL.test(item.title)) return
+      const prev = mergedMap.get(item.id)
+      if (!prev) { mergedMap.set(item.id, item); return }
+      mergedMap.set(item.id, {
+        ...prev, ...item,
+        title: item.title.length >= prev.title.length ? item.title : prev.title,
+        code: item.code || prev.code || undefined,
+        shortname: item.shortname || prev.shortname || undefined,
+        category: item.category || prev.category || undefined,
+        section: item.section || prev.section || undefined,
+        term: item.term || prev.term || undefined,
+        url: item.url || existingUrl(prev),
+      })
+    }
+    const existingUrl = p => p?.url || undefined
+    for (const c of baseCourses || []) mergeCourseEntry(c)
+    const currentUrl = new URL(location.href)
+    const isOverviewRoute = /^\/(?:my(?:\/|$)|index\.php$|\/?$)/i.test(currentUrl.pathname)
+    let sesskey = readPageSesskey(document)
+    let authoritativeCourses = false
+
+    if (isOverviewRoute && !/^\/my\/courses\.php$/i.test(currentUrl.pathname)) {
+      try {
+        const myCoursesUrl = `${currentUrl.origin}/my/courses.php`
+        const resp = await fetch(myCoursesUrl, { credentials: 'include' })
+        if (resp.ok) {
+          const html = await resp.text()
+          const doc = new DOMParser().parseFromString(html, 'text/html')
+          if (!doc.querySelector('input[type="password"]') && !doc.body?.classList.contains('notloggedin')) {
+            if (!sesskey) sesskey = readPageSesskey(doc, html)
+            for (const c of extractCoursesFromDocument(doc, myCoursesUrl)) mergeCourseEntry(c)
+          }
+        }
+      } catch (_) { /* optional discovery page */ }
+    }
+
+    if (sesskey) {
+      try {
+        const ajaxUrl = `${currentUrl.origin}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=core_course_get_enrolled_courses_by_timeline_classification`
+        const classifications = ['allincludinghidden', 'all', 'inprogress', 'future', 'past']
+        const ajaxResp = await fetch(ajaxUrl, {
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(classifications.map((classification, index) => ({
+            index, methodname: 'core_course_get_enrolled_courses_by_timeline_classification',
+            args: { offset: 0, limit: 200, classification, sort: 'fullname' },
+          }))),
+        })
+        if (ajaxResp.ok) {
+          const rawJson = typeof ajaxResp.json === 'function' ? await ajaxResp.json() : JSON.parse(await ajaxResp.text())
+          if (Array.isArray(rawJson)) {
+            let fullOk = false; let partOk = 0
+            const ingestList = (rawCourses) => {
+              for (const raw of rawCourses) {
+                if (!raw || typeof raw !== 'object') continue
+                const id = clean(String(raw.id ?? ''), 80)
+                const fullname = stripCourseSrPrefix(decodeHtmlText(raw.fullname || raw.displayname || raw.shortname, 300))
+                if (!id || id === '1' || !fullname) continue
+                const shortname = decodeHtmlText(raw.shortname, 120)
+                const category = decodeHtmlText(raw.coursecategory, 160)
+                const meta = extractCourseMeta(fullname, shortname, category)
+                const viewUrl = pageHref({ getAttribute: () => raw.viewurl || `/course/view.php?id=${encodeURIComponent(id)}` }, currentUrl.origin) || `${currentUrl.origin}/course/view.php?id=${encodeURIComponent(id)}`
+                mergeCourseEntry({
+                  id, title: fullname, url: viewUrl,
+                  ...(meta.code ? { code: meta.code } : {}),
+                  ...(shortname ? { shortname } : {}),
+                  ...(category ? { category } : {}),
+                  ...(meta.section ? { section: meta.section } : {}),
+                  ...(meta.term ? { term: meta.term } : {}),
+                  ...(meta.isSubclass ? { isSubclass: true } : {}),
+                  ...(meta.isNonAcademic ? { isNonAcademic: true } : {}),
+                  ...(raw.hidden === true ? { moodleHidden: true } : {}),
+                  ...(raw.isfavourite === true ? { starred: true } : {}),
+                })
+              }
+            }
+            for (let i = 0; i < rawJson.length; i += 1) {
+              const item = rawJson[i]
+              if (!item || item.error !== false || !Array.isArray(item.data?.courses)) continue
+              if (i <= 1) fullOk = true; else partOk += 1
+              ingestList(item.data.courses)
+            }
+            if (fullOk || partOk >= 3) authoritativeCourses = true
+          }
+        }
+      } catch (_) { /* optional Moodle AJAX */ }
+    }
+
+    if (!authoritativeCourses && isOverviewRoute) {
+      try {
+        const profileUrl = `${currentUrl.origin}/user/profile.php?showallcourses=1`
+        const profResp = await fetch(profileUrl, { credentials: 'include' })
+        if (profResp.ok) {
+          const profDoc = new DOMParser().parseFromString(await profResp.text(), 'text/html')
+          if (!profDoc.querySelector('input[type="password"]') && !profDoc.body?.classList.contains('notloggedin')) {
+            let count = 0
+            profDoc.querySelectorAll('a[href*="/user/view.php"], a[href*="/course/view.php"]').forEach(link => {
+              const href = pageHref(link, profileUrl)
+              if (!href) return
+              try {
+                const parsed = new URL(href)
+                const cid = parsed.pathname.includes('/user/view.php') ? parsed.searchParams.get('course') : parsed.searchParams.get('id')
+                const title = visibleLabelFromNode(link) || stripCourseSrPrefix(link.textContent)
+                if (!cid || cid === '1' || !title || GENERIC_COURSE_LABEL.test(title)) return
+                const meta = extractCourseMeta(title)
+                mergeCourseEntry({
+                  id: cid, title, url: `${currentUrl.origin}/course/view.php?id=${encodeURIComponent(cid)}`,
+                  ...(meta.code ? { code: meta.code } : {}),
+                  ...(meta.section ? { section: meta.section } : {}),
+                  ...(meta.term ? { term: meta.term } : {}),
+                  ...(meta.isSubclass ? { isSubclass: true } : {}),
+                  ...(meta.isNonAcademic ? { isNonAcademic: true } : {}),
+                })
+                count += 1
+              } catch (_) { /* ignore */ }
+            })
+            if (count > 0) authoritativeCourses = true
+          }
+        }
+      } catch (_) { /* optional profile fallback */ }
+    }
+    return { courses: finalizeCourseList(Array.from(mergedMap.values())), authoritativeCourses }
+  }
+
+  async function crawlMoodleCoursePages(baseData) {
+    const discovered = await discoverEnrolledMoodleCourses(baseData.courses)
+    const coursesMap = new Map(discovered.courses.map(item => [item.id, item]))
+    const current = new URL(location.href)
+    const orderedCourses = [...discovered.courses].sort((a, b) => {
+      const score = c => (c.starred ? 4 : 0) + (c.moodleHidden ? -2 : 1) + (c.isNonAcademic ? -1 : 1)
+      return score(b) - score(a)
+    })
+    const links = orderedCourses
+      .map(c => c.url || (/^\d+$/.test(c.id) ? `${current.origin}/course/view.php?id=${encodeURIComponent(c.id)}` : ''))
+      .filter(Boolean)
+    Array.from(document.querySelectorAll('a[href*="/course/view.php"]')).forEach(link => {
+      const rawHref = link.getAttribute('href') || ''
+      if (/#section-\d+/i.test(rawHref)) return
+      const href = pageHref(link, location.href)
+      if (!href) return
+      try {
+        const parsed = new URL(href)
+        if (!parsed.searchParams.has('section')) {
+          links.push(parsed.searchParams.get('id') ? `${parsed.origin}/course/view.php?id=${encodeURIComponent(parsed.searchParams.get('id'))}` : href)
+        }
+      } catch (_) { /* ignore */ }
+    })
+    if (/\/course\/(view|overview)\.php$/.test(current.pathname) && current.searchParams.has('id')) {
+      links.unshift(`${current.origin}/course/view.php?id=${encodeURIComponent(current.searchParams.get('id'))}`)
+    }
+    const unique = Array.from(new Set(links)).slice(0, 60)
+    const cacheKey = `${unique.join('|')}::${coursesMap.size}`
     const cached = globalThis.__myhkuMoodleCrawlCache
     if (!globalThis.__myhkuForceCrawl && cached && cached.key === cacheKey && Date.now() - cached.at < 60_000) {
       return {
-        courses: baseData.courses,
+        courses: finalizeCourseList(Array.from(coursesMap.values())),
         assignments: mergeAssignmentLists(baseData.assignments, cached.extra.assignments),
         announcements: Array.from(new Map([...baseData.announcements, ...cached.extra.announcements].map(item => [item.id, item])).values()),
         resources: Array.from(new Map([...baseData.resources, ...cached.extra.resources].map(item => [item.id, item])).values()),
         grades: Array.from(new Map([...baseData.grades, ...cached.extra.grades].map(item => [item.id, item])).values()),
         completeCrawl: cached.completeCrawl,
+        authoritativeCourses: discovered.authoritativeCourses,
       }
     }
     const extra = { assignments: [], announcements: [], resources: [], grades: [] }
     const seen = { assignments: new Set(), announcements: new Set(), resources: new Set(), grades: new Set() }
     const upsertAssignment = (item) => {
       const index = extra.assignments.findIndex(existing => existing.id === item.id)
-      if (index < 0) {
-        seen.assignments.add(item.id)
-        extra.assignments.push(item)
-      } else {
-        extra.assignments[index] = mergeAssignmentItem(extra.assignments[index], item)
-      }
+      if (index < 0) { seen.assignments.add(item.id); extra.assignments.push(item) }
+      else extra.assignments[index] = mergeAssignmentItem(extra.assignments[index], item)
     }
     let failedCourses = 0
-    await runBounded(unique, 4, async (courseUrl) => {
+    await runBounded(unique, 6, async (courseUrl) => {
       try {
         const response = await fetch(courseUrl, { credentials: 'include' })
         if (!response.ok) { failedCourses += 1; return }
         const html = await response.text()
         const doc = new DOMParser().parseFromString(html, 'text/html')
-        const heading = clean(doc.querySelector('h1, .page-header-headings, [data-region="header"]')?.textContent) || '未提供课程'
+        const courseId = new URL(courseUrl).searchParams.get('id') || ''
+        const knownCourse = courseId ? coursesMap.get(courseId) : undefined
+        const pageHeading = stripCourseSrPrefix(doc.querySelector('h1, .page-header-headings, [data-region="header"]')?.textContent)
+        const heading = pageHeading || knownCourse?.title || '未提供课程'
+        if (courseId && courseId !== '1' && pageHeading && !GENERIC_COURSE_LABEL.test(pageHeading)) {
+          const meta = extractCourseMeta(pageHeading, knownCourse?.shortname || '', knownCourse?.category || '')
+          coursesMap.set(courseId, {
+            ...(knownCourse || { id: courseId, url: courseUrl }),
+            id: courseId,
+            title: knownCourse?.title && knownCourse.title.length > pageHeading.length ? knownCourse.title : pageHeading,
+            ...(knownCourse?.code || meta.code ? { code: knownCourse?.code || meta.code } : {}),
+            ...(knownCourse?.section || meta.section ? { section: knownCourse?.section || meta.section } : {}),
+            ...(knownCourse?.term || meta.term ? { term: knownCourse?.term || meta.term } : {}),
+            ...((knownCourse?.isSubclass || meta.isSubclass) ? { isSubclass: true } : {}),
+            ...((knownCourse?.isNonAcademic || meta.isNonAcademic) ? { isNonAcademic: true } : {}),
+          })
+        }
+        const cidField = courseId ? { courseId } : {}
         const pendingDetailLinks = []
         doc.querySelectorAll('a[href*="/mod/resource/"], a[href*="/mod/folder/"], a[href*="/mod/url/"], a[href*="/mod/page/"]').forEach(link => {
           const href = pageHref(link, courseUrl); const title = clean(link.textContent) || clean(link.getAttribute('aria-label'))
           if (!href || !title) return
           const id = idFrom(link, href, 'resource', `${heading}|${title}`)
           if (seen.resources.has(id)) return
-          seen.resources.add(id); extra.resources.push({ id, title, course: heading, url: href })
+          seen.resources.add(id); extra.resources.push({ id, title, course: heading, ...cidField, url: href })
         })
         doc.querySelectorAll('a[href*="/mod/assign/"], a[href*="assign/view"], a[href*="/mod/quiz/"], a[href*="/mod/turnitintooltwo/"]').forEach(link => {
           const href = pageHref(link, courseUrl)
@@ -402,7 +724,7 @@
           if (!title) return
           const id = idFrom(root, href, 'assignment', `${heading}|${title}`)
           const due = parseDue(root); const status = submissionStatus(root); const done = completed(root)
-          upsertAssignment({ id, title, course: heading, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) })
+          upsertAssignment({ id, title, course: heading, ...cidField, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) })
           if (/\/mod\/assign\/view\.php\b/i.test(href) && (!due || !status || done === undefined)) {
             pendingDetailLinks.push({ id, title, href })
           }
@@ -413,7 +735,7 @@
           const id = idFrom(root, href, 'announcement', `${heading}|${title}`)
           if (seen.announcements.has(id)) return
           seen.announcements.add(id); const timeNode = root.querySelector('time[datetime], time, .date, .discussion-date'); const published = clean(timeNode && (timeNode.getAttribute('datetime') || timeNode.textContent))
-          extra.announcements.push({ id, title, course: heading, ...(published ? { published } : {}), url: href })
+          extra.announcements.push({ id, title, course: heading, ...cidField, ...(published ? { published } : {}), url: href })
         })
         doc.querySelectorAll('table.grades tr, table.user-grade tr').forEach(node => {
           const root = node.matches('tr') ? node : nearest(node)
@@ -427,15 +749,14 @@
           const id = idFrom(root, href, 'grade', `${heading}|${title}`)
           if (seen.grades.has(id)) return
           seen.grades.add(id)
-          extra.grades.push({ id, title, course: heading, ...(parsed.value ? { value: parsed.value } : {}), released: parsed.released })
+          extra.grades.push({ id, title, course: heading, ...cidField, ...(parsed.value ? { value: parsed.value } : {}), released: parsed.released })
         })
         // Moodle 5 puts due dates, submission states and grades in the course overview
         // or mod/assign/index.php, not in the course's activity cards. Match rows by the activity URL id.
-        const courseId = new URL(courseUrl).searchParams.get('id')
-        const summaryUrls = [
+        const summaryUrls = courseId ? [
           new URL(`/course/overview.php?id=${encodeURIComponent(courseId)}`, courseUrl).href,
           new URL(`/mod/assign/index.php?id=${encodeURIComponent(courseId)}`, courseUrl).href,
-        ]
+        ] : []
         for (const summaryUrl of summaryUrls) {
           try {
             const overviewResponse = await fetch(summaryUrl, { credentials: 'include' })
@@ -447,11 +768,11 @@
               if (!href || !title) return
               const id = idFrom(root, href, 'assignment', title)
               const due = parseDue(root); const status = submissionStatus(root); const done = completed(root)
-              upsertAssignment({ id, title, course: heading, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) })
+              upsertAssignment({ id, title, course: heading, ...cidField, ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(done === undefined ? {} : { completed: done }) })
               const parsedGrade = extractGradeFromRow(root)
               if (parsedGrade) {
                 const gradeId = `grade-${id}`
-                const gradeItem = { id: gradeId, title, course: heading, ...(parsedGrade.value ? { value: parsedGrade.value } : {}), released: parsedGrade.released }
+                const gradeItem = { id: gradeId, title, course: heading, ...cidField, ...(parsedGrade.value ? { value: parsedGrade.value } : {}), released: parsedGrade.released }
                 const gradeIdx = extra.grades.findIndex(existing => existing.id === gradeId)
                 if (gradeIdx < 0) { seen.grades.add(gradeId); extra.grades.push(gradeItem) }
                 else extra.grades[gradeIdx] = gradeItem
@@ -474,13 +795,14 @@
               id: candidate.id,
               title: candidate.title,
               course: heading,
+              ...cidField,
               ...(detail.due ? { due: detail.due } : {}),
               ...(detail.status ? { submissionStatus: detail.status } : {}),
               ...(detail.done !== undefined ? { completed: detail.done } : {}),
             })
             if (detail.grade) {
               const gradeId = `grade-${candidate.id}`
-              const gradeItem = { id: gradeId, title: candidate.title, course: heading, ...(detail.grade.value ? { value: detail.grade.value } : {}), released: detail.grade.released }
+              const gradeItem = { id: gradeId, title: candidate.title, course: heading, ...cidField, ...(detail.grade.value ? { value: detail.grade.value } : {}), released: detail.grade.released }
               const gradeIdx = extra.grades.findIndex(existing => existing.id === gradeId)
               if (gradeIdx < 0) { seen.grades.add(gradeId); extra.grades.push(gradeItem) }
               else extra.grades[gradeIdx] = gradeItem
@@ -489,15 +811,17 @@
         })
       } catch (_) { failedCourses += 1 }
     })
-    const completeCrawl = unique.length > 0 && failedCourses === 0
+    const finalCourses = finalizeCourseList(Array.from(coursesMap.values()))
+    const completeCrawl = unique.length > 0 && failedCourses === 0 && unique.length >= finalCourses.length
     globalThis.__myhkuMoodleCrawlCache = { key: cacheKey, at: Date.now(), extra, completeCrawl }
     return {
-      courses: baseData.courses,
+      courses: finalCourses,
       assignments: mergeAssignmentLists(baseData.assignments, extra.assignments),
       announcements: Array.from(new Map([...baseData.announcements, ...extra.announcements].map(item => [item.id, item])).values()),
       resources: Array.from(new Map([...baseData.resources, ...extra.resources].map(item => [item.id, item])).values()),
       grades: Array.from(new Map([...baseData.grades, ...extra.grades].map(item => [item.id, item])).values()),
       completeCrawl,
+      authoritativeCourses: discovered.authoritativeCourses,
     }
   }
 
@@ -927,16 +1251,16 @@
         ? await prefetchSisWeeks()
         : { schedule: await crawlPortalSchedule(extractSis()) }
     const fields = Object.fromEntries(Object.entries(data).filter(([key, value]) =>
-      (key !== 'completeCrawl' && Array.isArray(value)) ||
+      (key !== 'completeCrawl' && key !== 'authoritativeCourses' && Array.isArray(value)) ||
       (key === 'scheduleWeek' && value && typeof value === 'object')))
     const sisComplete = documentsComplete()
     if (site === 'sis' && !sisComplete && (!Array.isArray(fields.schedule) || fields.schedule.length === 0)) {
       delete fields.scheduleWeek
       delete fields.scheduleWeeks
     }
-    if (site === 'sis' && Array.isArray(fields.schedule) && (fields.schedule.length > 0 || (sisComplete && (fields.scheduleWeek || (Array.isArray(fields.scheduleWeeks) && fields.scheduleWeeks.length > 0))))) {
+    if (site === 'sis' && Array.isArray(fields.schedule) && (fields.schedule.length > 0 || (sisComplete && (fields.scheduleWeek || (fields.scheduleWeeks?.length > 0))))) {
       fields.replaceFields = ['schedule']
-    } else if (site === 'moodle' && /^\/my(?:\/|$)/i.test(location.pathname) && Array.isArray(fields.courses) && fields.courses.length > 0) {
+    } else if (site === 'moodle' && data.authoritativeCourses && Array.isArray(fields.courses) && fields.courses.length > 0) {
       fields.replaceFields = data.completeCrawl
         ? ['courses', 'assignments', 'resources', 'announcements', 'grades']
         : ['courses']

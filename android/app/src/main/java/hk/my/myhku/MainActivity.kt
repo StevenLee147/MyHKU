@@ -531,6 +531,64 @@ class MainActivity : AppCompatActivity() {
         return incoming
     }
 
+    private fun mergeMoodlePayload(previousRaw: String?, incoming: JSONObject): JSONObject {
+        if (previousRaw.isNullOrBlank() || !incoming.optBoolean("connected", false)) return incoming
+        val previous = runCatching { JSONObject(previousRaw) }.getOrNull() ?: return incoming
+        val replaceSet = mutableSetOf<String>()
+        incoming.optJSONArray("replaceFields")?.let { arr ->
+            for (i in 0 until arr.length()) replaceSet.add(arr.optString(i))
+        }
+        val moodleFields = listOf("courses", "assignments", "announcements", "resources", "grades")
+        for (field in moodleFields) {
+            if (field in replaceSet) continue
+            val prevArr = previous.optJSONArray(field)
+            val nextArr = incoming.optJSONArray(field)
+            if (prevArr == null && nextArr == null) continue
+            val byId = linkedMapOf<String, JSONObject>()
+            val unkeyed = mutableListOf<JSONObject>()
+            prevArr?.let {
+                for (i in 0 until it.length()) {
+                    val item = it.optJSONObject(i) ?: continue
+                    val id = item.optString("id", "")
+                    if (id.isEmpty()) unkeyed.add(item) else byId[id] = JSONObject(item.toString())
+                }
+            }
+            nextArr?.let {
+                for (i in 0 until it.length()) {
+                    val item = it.optJSONObject(i) ?: continue
+                    val id = item.optString("id", "")
+                    if (id.isEmpty()) {
+                        unkeyed.add(item)
+                    } else {
+                        val existing = byId[id]
+                        if (existing == null) {
+                            byId[id] = item
+                        } else {
+                            val merged = JSONObject(existing.toString())
+                            val keys = item.keys()
+                            while (keys.hasNext()) {
+                                val k = keys.next()
+                                if (field == "courses" && k == "title") {
+                                    val nextTitle = item.optString(k, "")
+                                    val prevTitle = existing.optString(k, "")
+                                    if (nextTitle.length >= prevTitle.length) merged.put(k, nextTitle)
+                                } else {
+                                    merged.put(k, item.get(k))
+                                }
+                            }
+                            byId[id] = merged
+                        }
+                    }
+                }
+            }
+            val out = JSONArray()
+            byId.values.forEach { out.put(it) }
+            unkeyed.forEach { out.put(it) }
+            incoming.put(field, out)
+        }
+        return incoming
+    }
+
     private inner class HkuPageBridge {
         @android.webkit.JavascriptInterface
         fun ingest(payload: String) {
@@ -545,7 +603,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             if (siteKey !in setOf("moodle", "portal", "sis")) return
-            val effective = if (siteKey == "sis") mergeSisPayload(sitePayloads["sis"], parsed) else parsed
+            val effective = when (siteKey) {
+                "sis" -> mergeSisPayload(sitePayloads["sis"], parsed)
+                "moodle" -> mergeMoodlePayload(sitePayloads["moodle"], parsed)
+                else -> parsed
+            }
             val serialized = effective.toString()
             sitePayloads[siteKey] = serialized
             if (siteKey == "portal" && effective.optBoolean("connected", false) && (effective.optJSONArray("schedule")?.length() ?: 0) > 0) {

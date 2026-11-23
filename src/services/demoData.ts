@@ -32,10 +32,12 @@ export function buildDemoSnapshot(now = new Date()): LiveSnapshot {
     scheduleWeek: scheduleWeeks[0],
     scheduleWeeks,
     courses: [
-      { id: 'demo-comp7901', code: 'COMP7901', title: 'COMP7901 数据科学导论' },
-      { id: 'demo-comp7801', code: 'COMP7801', title: 'COMP7801 计算机系统原理' },
-      { id: 'demo-comp7103', code: 'COMP7103', title: 'COMP7103 数据挖掘与知识发现' },
-      { id: 'demo-caes9920', code: 'CAES9920', title: 'CAES9920 学术研究写作' },
+      { id: 'demo-comp7901', code: 'COMP7901', term: '2026-27', title: 'COMP7901 数据科学导论', starred: true },
+      { id: 'demo-comp7801', code: 'COMP7801', term: '2026-27', title: 'COMP7801 计算机系统原理' },
+      { id: 'demo-comp7103', code: 'COMP7103', term: '2026-27', title: 'COMP7103 数据挖掘与知识发现' },
+      { id: 'demo-caes9920', code: 'CAES9920', term: '2026-27', title: 'CAES9920 学术研究写作' },
+      { id: 'demo-comp7901-sub', code: 'COMP7901', section: '1A', term: '2026-27', isSubclass: true, title: 'COMP7901-1A 数据科学导论 Tutorial Subclass 1A' },
+      { id: 'demo-integrity', term: '2026-27', isNonAcademic: true, title: 'HKU Academic Integrity & Anti-Plagiarism Orientation' },
     ],
     schedule: [
       // Ensure today always shows realistic classes in Demo Overview

@@ -222,11 +222,24 @@ export type LiveSnapshot = {
 }
 
 export type LiveClass = { id: string; title: string; code?: string; date?: string; day?: string; start: string; end: string; room?: string; teacher?: string }
-export type LiveCourse = { id: string; title: string; code?: string }
-export type LiveAssignment = { id: string; title: string; course: string; due?: string; completed?: boolean; submissionStatus?: string }
-export type LiveResource = { id: string; title: string; course: string; url?: string }
-export type LiveGrade = { id: string; title: string; course: string; value?: string; released?: boolean }
-export type LiveAnnouncement = { id: string; title: string; course: string; published?: string; url?: string }
+export type LiveCourse = {
+  id: string
+  title: string
+  code?: string
+  shortname?: string
+  category?: string
+  section?: string
+  term?: string
+  url?: string
+  isSubclass?: boolean
+  isNonAcademic?: boolean
+  moodleHidden?: boolean
+  starred?: boolean
+}
+export type LiveAssignment = { id: string; title: string; course: string; courseId?: string; due?: string; completed?: boolean; submissionStatus?: string }
+export type LiveResource = { id: string; title: string; course: string; courseId?: string; url?: string }
+export type LiveGrade = { id: string; title: string; course: string; courseId?: string; value?: string; released?: boolean }
+export type LiveAnnouncement = { id: string; title: string; course: string; courseId?: string; published?: string; url?: string }
 
 function normalizeSnapshotPayload(payload: Partial<LiveSnapshot>, fallbackFetchedAt?: string): LiveSnapshot {
   const weeks = Array.isArray(payload.scheduleWeeks)

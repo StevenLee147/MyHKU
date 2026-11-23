@@ -3533,3 +3533,277 @@ dialog.myhku-modal.command-palette-dialog {
   }
 }
 /* end v0.4.0-beta styles */
+
+/* v0.4.2-beta Moodle Search Toolbar, Subclass Badges & Course Visibility Selector */
+:root {
+  --icon-moodle-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'></polyline></svg>");
+  --icon-moodle-dash: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='4.5' stroke-linecap='round' stroke-linejoin='round'><line x1='5' y1='12' x2='19' y2='12'></line></svg>");
+}
+
+.moodle-checkbox {
+  --checkbox-size: 1.15em;
+  --checkbox-icon-size: 0.72em;
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  inline-size: var(--checkbox-size);
+  aspect-ratio: 1;
+  margin: 0;
+  border: 1.8px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.moodle-checkbox::before {
+  content: "";
+  inline-size: var(--checkbox-icon-size);
+  aspect-ratio: 1;
+  background-color: #ffffff;
+  mask: var(--checkbox-icon) no-repeat center / contain;
+  scale: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .moodle-checkbox::before { transition: scale 140ms ease; }
+}
+
+@media (forced-colors: active) {
+  .moodle-checkbox::before { background-color: CanvasText; }
+}
+
+.moodle-checkbox:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  --checkbox-icon: var(--icon-moodle-check);
+}
+
+.moodle-checkbox:indeterminate {
+  background: var(--accent);
+  border-color: var(--accent);
+  --checkbox-icon: var(--icon-moodle-dash);
+}
+
+.moodle-checkbox:is(:checked, :indeterminate)::before { scale: 1; }
+.moodle-checkbox:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.moodle-checkbox:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.course-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-block-size: 44px;
+  cursor: pointer;
+}
+
+.moodle-search-toolbar {
+  padding: 0 22px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.moodle-search-toolbar.compact-detail-search { padding-bottom: 12px; }
+
+.moodle-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.moodle-inline-search {
+  flex: 1 1 260px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.moodle-inline-search:focus-within {
+  border-color: var(--accent);
+  background: var(--bg-surface);
+  color: var(--accent-text);
+}
+
+.moodle-inline-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.moodle-mini-select {
+  height: 33px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.moodle-filter-pills {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pill-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.filter-pill.subtle {
+  font-size: 10.5px;
+  padding: 4px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hidden-match-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--accent);
+  background: var(--accent-soft);
+  font-size: 11.5px;
+  color: var(--accent-text);
+}
+
+.live-columns.single-scope-columns { grid-template-columns: minmax(0, 1fr); }
+
+.course-row-shell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.course-row-shell .course-select-row { border-top: 0; flex: 1; min-width: 0; }
+.course-row-shell.temp-revealed { opacity: 0.78; }
+.course-row-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.course-row-title { font-weight: 500; word-break: break-word; }
+.course-pin-inline { opacity: 0.45; flex-shrink: 0; }
+
+.course-pin-inline.pinned,
+.course-row-shell:hover .course-pin-inline,
+.course-pin-inline:focus-visible {
+  opacity: 1;
+  color: #d97706;
+}
+
+.course-meta-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.course-badge {
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1.3;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.course-badge.code { background: var(--accent-soft); color: var(--accent-text); }
+.course-badge.subclass { background: rgba(217, 119, 6, 0.13); color: #b45309; border-color: rgba(217, 119, 6, 0.28); }
+:root[data-theme='dark'] .course-badge.subclass { color: #fbbf24; }
+.course-badge.section, .course-badge.term { background: var(--bg-subtle); color: var(--text-secondary); border-color: var(--border-subtle); }
+.course-badge.admin, .course-badge.muted { background: var(--bg-subtle); color: var(--text-muted); }
+.course-badge.pending { background: rgba(220, 38, 38, 0.11); color: #dc2626; }
+:root[data-theme='dark'] .course-badge.pending { color: #f87171; }
+.inline-head-badge { margin-left: 8px; vertical-align: middle; }
+
+dialog.myhku-modal.course-selector-modal {
+  width: min(680px, calc(100vw - 28px));
+  max-height: min(82dvh, 740px);
+}
+
+.course-selector-modal .modal-head h2 { display: inline-flex; align-items: center; gap: 7px; }
+.modal-subcopy { margin: 4px 0 0; font-size: 11.5px; color: var(--text-secondary); }
+
+.course-selector-toolbar {
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 10px;
+  background: var(--bg-surface);
+}
+
+.course-selector-tabs, .batch-quick-btns { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.course-selector-batch-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.select-all-label { min-block-size: 36px; font-size: 12px; font-weight: 600; color: var(--text-heading); }
+.course-selector-rules { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-top: 2px; }
+.course-selector-rules .rule-toggle { min-block-size: 34px; font-size: 11.5px; color: var(--text-secondary); }
+
+.course-selector-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+.course-selector-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 4px 0;
+}
+
+.course-selector-item:last-child { border-bottom: 0; }
+.course-selector-item.is-hidden .course-item-copy strong { color: var(--text-muted); text-decoration: line-through; }
+.course-item-main { flex: 1; min-width: 0; padding: 4px 0; }
+.course-item-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.course-item-copy strong { font-size: 12.5px; color: var(--text-heading); word-break: break-word; }
+.course-item-stats { font-size: 11px; color: var(--text-muted); }
+.course-item-stats .has-pending-warn { color: #d97706; font-weight: 600; }
+.course-selector-empty { padding: 28px 0; }
+
+.course-selector-foot {
+  padding: 12px 22px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.selector-foot-note { font-size: 11.5px; color: var(--text-muted); }
+
+@media (max-width: 640px) {
+  .moodle-search-toolbar,
+  .course-selector-toolbar,
+  .course-selector-list,
+  .course-selector-foot {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+/* end v0.4.2-beta styles */

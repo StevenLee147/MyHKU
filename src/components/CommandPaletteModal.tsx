@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  SlidersHorizontal,
   Sun,
   X,
 } from 'lucide-react'
@@ -42,6 +43,7 @@ export function CommandPaletteModal({
   onSelectCourse,
   onSync,
   onOpenAddTask,
+  onOpenCourseSelector,
   onExportIcs,
   onToggleTheme,
   onToggleLocale,
@@ -56,6 +58,7 @@ export function CommandPaletteModal({
   onSelectCourse: (courseIdOrTitle: string) => void
   onSync: () => void
   onOpenAddTask: () => void
+  onOpenCourseSelector?: () => void
   onExportIcs: () => void
   onToggleTheme: (next: ThemeMode) => void
   onToggleLocale: () => void
@@ -106,6 +109,19 @@ export function CommandPaletteModal({
         icon: Plus,
         run: onOpenAddTask,
       },
+      ...(onOpenCourseSelector
+        ? [
+            {
+              id: 'act-moodle-courses',
+              group: actionsGroup,
+              title: tr(locale, '管理 Moodle 显示课程与过滤 Subclass', 'Manage Visible Moodle Courses & Subclasses'),
+              subtitle: tr(locale, '勾选需要显示的课程，一键隐藏 Subclass 或系统培训页', 'Choose displayed courses and hide Subclass / orientation shells'),
+              keywords: 'moodle course subclass filter hide 课程 隐藏 子班 筛选 选择',
+              icon: SlidersHorizontal,
+              run: onOpenCourseSelector,
+            },
+          ]
+        : []),
       {
         id: 'act-ics',
         group: actionsGroup,

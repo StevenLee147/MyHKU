@@ -25,8 +25,16 @@ import { CommandPaletteModal } from './components/CommandPaletteModal'
 import { CustomTaskModal } from './components/CustomTaskModal'
 import { CalendarPage } from './components/CalendarPage'
 import { MaterialsPage } from './components/MaterialsPage'
+import { MoodleCourseSelectorModal } from './components/MoodleCourseSelectorModal'
 import { MoodlePage } from './components/MoodlePage'
 import { OverviewPage, type ConnectionPhase } from './components/OverviewPage'
+import {
+  clearMoodleCoursePrefs,
+  filterSnapshotByCoursePrefs,
+  getMoodleCoursePrefs,
+  saveMoodleCoursePrefs,
+  type MoodleCoursePrefs,
+} from './services/moodleCourses'
 import { SettingsPage } from './components/SettingsPage'
 import {
   addCustomTask,
@@ -405,8 +413,18 @@ function App() {
     [showToast],
   )
 
+  const [coursePrefs, setCoursePrefs] = useState<MoodleCoursePrefs>(() => getMoodleCoursePrefs())
+  const [courseSelectorOpen, setCourseSelectorOpen] = useState(false)
+  const handleUpdateCoursePrefs = useCallback((next: MoodleCoursePrefs) => {
+    setCoursePrefs(saveMoodleCoursePrefs(next))
+  }, [])
+
   const demoSnapshot = useMemo(() => buildDemoSnapshot(), [])
-  const activeSnapshot = dataMode === 'demo' ? demoSnapshot : liveSnapshot
+  const rawActiveSnapshot = dataMode === 'demo' ? demoSnapshot : liveSnapshot
+  const activeSnapshot = useMemo(
+    () => filterSnapshotByCoursePrefs(rawActiveSnapshot, coursePrefs),
+    [rawActiveSnapshot, coursePrefs],
+  )
 
   useEffect(() => {
     if (!window.myhkuDesktop?.updateTraySummary) return
@@ -802,6 +820,10 @@ function App() {
               <MoodlePage
                 locale={locale}
                 snapshot={activeSnapshot}
+                rawSnapshot={rawActiveSnapshot || activeSnapshot}
+                coursePrefs={coursePrefs}
+                onChangeCoursePrefs={handleUpdateCoursePrefs}
+                onOpenCourseSelector={() => setCourseSelectorOpen(true)}
                 customTasks={customTasks}
                 query={query}
                 selectedCourseId={selectedCourseId}
@@ -868,11 +890,15 @@ function App() {
               }}
               states={connections}
               setStates={setConnections}
-              snapshot={activeSnapshot}
+              snapshot={rawActiveSnapshot}
               customTasksCount={customTasks.length}
               account={account}
               onEditAccount={() => setEditingAccount(true)}
-              onSignOut={handleSignOut}
+              onSignOut={async () => {
+                clearMoodleCoursePrefs()
+                setCoursePrefs(getMoodleCoursePrefs())
+                await handleSignOut()
+              }}
               onNotice={msg => showToast(msg, 4000)}
               onRebuildCache={async scope => {
                 const remaining = await clearSnapshotScope(scope)
@@ -889,6 +915,7 @@ function App() {
               }}
               onRestoredBackup={restored => {
                 setCustomTasks(getCustomTasks())
+                setCoursePrefs(getMoodleCoursePrefs())
                 if (restored.themeMode) {
                   setThemeMode(restored.themeMode)
                   setThemeModeState(restored.themeMode)
@@ -930,6 +957,17 @@ function App() {
         onSave={handleSaveCustomTask}
       />
 
+      {rawActiveSnapshot && (
+        <MoodleCourseSelectorModal
+          open={courseSelectorOpen}
+          locale={locale}
+          rawSnapshot={rawActiveSnapshot}
+          prefs={coursePrefs}
+          onChangePrefs={handleUpdateCoursePrefs}
+          onClose={() => setCourseSelectorOpen(false)}
+        />
+      )}
+
       <CommandPaletteModal
         open={paletteOpen}
         locale={locale}
@@ -941,6 +979,14 @@ function App() {
         onSelectCourse={course => handleNavigate('moodle', course)}
         onSync={() => sync(true)}
         onOpenAddTask={() => openAddTaskModal()}
+        onOpenCourseSelector={
+          rawActiveSnapshot
+            ? () => {
+                setActive('moodle')
+                setCourseSelectorOpen(true)
+              }
+            : undefined
+        }
         onExportIcs={handleExportIcs}
         onToggleTheme={next => {
           setThemeMode(next)

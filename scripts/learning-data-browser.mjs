@@ -200,6 +200,38 @@ app.whenReady().then(async () => {
     assert.equal(t23?.completed, true)
     console.log('PASS Moodle overview due dates, Opened/Due separation, false-positive guard, quiz/turnitin & detail fallback')
 
+    const ajaxCourses = Array.from({ length: 24 }, (_, idx) => ({
+      id: 2000 + idx,
+      fullname: idx === 0
+        ? 'GLIS1901_1A_2026 Foundations of Global Studies'
+        : idx === 1
+          ? 'COMP2113 Programming Technologies [2026]'
+          : idx === 2
+            ? 'COMP2113_2B_2026 Programming Technologies Tutorial Subclass 2B'
+            : `ECON${1000 + idx} Principles Course ${idx}`,
+      shortname: idx === 0 ? 'GLIS1901_1A_2026' : idx === 2 ? 'COMP2113_2B_2026' : `ECON${1000 + idx}_2026`,
+      coursecategory: 'Faculty of Business and Economics',
+      viewurl: `https://moodle.hku.hk/course/view.php?id=${2000 + idx}`,
+      isfavourite: idx === 0,
+      hidden: false,
+    }))
+    const ajaxEndpoint = 'https://moodle.hku.hk/lib/ajax/service.php?sesskey=testSess123&info=core_course_get_enrolled_courses_by_timeline_classification'
+    const ajaxPages = Object.fromEntries(ajaxCourses.map(c => [`https://moodle.hku.hk/course/view.php?id=${c.id}`, `<h1>${c.fullname}</h1>`]))
+    ajaxPages[ajaxEndpoint] = JSON.stringify([
+      { error: false, data: { courses: ajaxCourses, nextoffset: 0 } },
+      { error: false, data: { courses: ajaxCourses, nextoffset: 0 } },
+    ])
+    const fullAjaxMoodle = await extract(
+      '<input type="hidden" name="sesskey" value="testSess123"><a href="https://moodle.hku.hk/course/view.php?id=2000"><span class="sr-only">Course is starred</span><span class="multiline"><span class="sr-only">GLIS1901_1A_2026</span><span aria-hidden="true">GLIS1901_1A_2026</span></span></a>',
+      'https://moodle.hku.hk/my/',
+      ajaxPages,
+    )
+    assert.equal(fullAjaxMoodle.courses.length, 24, 'Moodle AJAX discovers all 24 enrolled courses beyond the legacy 20 cap')
+    assert.deepEqual(fullAjaxMoodle.replaceFields, ['courses', 'assignments', 'resources', 'announcements', 'grades'])
+    assert.equal(fullAjaxMoodle.courses.find(c => c.id === '2000')?.code, 'GLIS1901', 'underscore shortname extracts GLIS1901')
+    assert.equal(fullAjaxMoodle.courses.find(c => c.id === '2002')?.isSubclass, true, 'subclass shell flagged automatically')
+    console.log('PASS Moodle full AJAX discovery (>20 courses), underscore code extraction, and subclass tagging')
+
     const parseHtml = (html, base) => run(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`)
     const file = 'https://moodle.hku.hk/pluginfile.php/123/mod_resource/content/1/lecture.pdf'
     const resource = 'https://moodle.hku.hk/mod/resource/view.php?id=13'
@@ -251,7 +283,11 @@ app.whenReady().then(async () => {
     await new Promise(resolve => setTimeout(resolve, 250))
     writeFileSync(join(app.getPath('userData'), 'materials.png'), (await win.webContents.capturePage()).toPNG())
     await run('[...document.querySelectorAll("nav button")].find(node => node.innerText.includes("Moodle")).click()')
-    await until('document.querySelectorAll(".course-select-row").length >= 1 && document.querySelector(".gpa-card") !== null')
+    await until('document.querySelectorAll(".course-select-row").length >= 1 && document.querySelector(".gpa-card") !== null && document.querySelector(".manage-courses-btn") !== null')
+    await run('document.querySelector(".manage-courses-btn").click()')
+    await until('document.querySelector("dialog.course-selector-modal")?.open === true')
+    await run('document.querySelector("dialog.course-selector-modal")?.close()')
+    await until('document.querySelector("dialog.course-selector-modal")?.open === false')
     await run('document.querySelector(".course-select-row").click()')
     await until('document.querySelector(".course-detail-page") !== null && document.querySelector(".course-whatif-card") !== null && document.body.innerText.includes("未发布")')
     await run('document.querySelector(".palette-trigger-btn").click()')

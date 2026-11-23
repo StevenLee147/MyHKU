@@ -1,14 +1,14 @@
 {
   "name": "myhku-dashboard",
   "private": true,
-  "version": "0.4.1-beta",
+  "version": "0.4.2-beta",
   "description": "HKU Portal, SIS and Moodle learning dashboard",
   "author": "MyHKU",
   "main": "desktop/main.mjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "npm run test:privacy && node --test scripts/bridge-and-schedule.test.mjs && npm run bridge:cdp:test && npm run test:macos-release",
+    "test": "npm run test:privacy && node --test scripts/bridge-and-schedule.test.mjs scripts/moodle-courses.test.mjs scripts/materials-storage.test.mjs && npm run bridge:cdp:test && npm run test:macos-release",
     "check:privacy": "node scripts/check-privacy.mjs",
     "test:privacy": "node --test scripts/check-privacy.test.mjs",
     "test:learning-data": "npm run build:web && node scripts/test-learning-data.mjs",
@@ -125,5 +125,5 @@
       }
     }
   },
-  "androidVersionCode": 16
+  "androidVersionCode": 17
 }
