@@ -252,7 +252,7 @@ app.whenReady().then(async () => {
     const js = readFileSync(new URL(`../dist/${index.match(/src="\.\/([^"\s]+\.js)"/)[1]}`, import.meta.url), 'utf8')
     const css = readFileSync(new URL(`../dist/${index.match(/href="\.\/([^"\s]+\.css)"/)[1]}`, import.meta.url), 'utf8')
     const snapshot = { ...table, ...moodle, fetchedAt: new Date().toISOString(), resources: [...moodle.resources, { id: 'other', course: 'Second course', title: 'Reading material', url: resource }] }
-    const mock = `window.myhkuDesktop = { legalStatus: async () => ({accepted:true}), accountStatus: async () => ({ configured: true, localUsername: 'Fixture', email: 'student@example.test' }), authSessions: async () => Object.fromEntries(['portal','sis','moodle'].map(site => [site,{state:'connected'}])), refreshHku: async () => 3, downloadResource: async url => { window.downloadClicked = url; return 1; } }; window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(snapshot)}));`
+    const mock = `window.myhkuDesktop = { legalStatus: async () => ({accepted:true}), accountStatus: async () => ({ configured: true, localUsername: 'Fixture', email: 'student@example.test' }), authSessions: async () => Object.fromEntries(['portal','sis','moodle'].map(site => [site,{state:'connected'}])), refreshHku: async () => 3, getStorageConfig: async () => ({ storageDir: 'D:/HKU_Courses', defaultDir: 'D:/Downloads/MyHKU', effectiveDir: 'D:/HKU_Courses', organizeMode: 'bglis', isCustom: true }), scanStorageDirectory: async () => ({ rootDir: 'D:/HKU_Courses', exists: true, courses: ['GLIS1901'], files: [] }), checkResourceUpdates: async items => Object.fromEntries(items.slice(0, 1).map(it => [it.id, { id: it.id, url: it.url, signature: 'sig-rev-2', files: [], hasRemoteUpdate: true, reason: 'Moodle 远端文件已升级至第 2 版', checkedAt: new Date().toISOString() }])), downloadResource: async url => { window.downloadClicked = url; return 1; } }; window.fetch = async () => new Response(JSON.stringify(${JSON.stringify(snapshot)}));`
     win.webContents.session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: /^https?:/.test(details.url) && !details.url.startsWith('https://dashboard.example.test/') }))
     await win.webContents.session.protocol.handle('https', () => new Response(`<meta charset="utf-8"><style>${css}</style><div id="root"></div><script>${mock}</script><script type="module">${js}</script>`, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }))
     await win.loadURL('https://dashboard.example.test/')
@@ -272,8 +272,8 @@ app.whenReady().then(async () => {
     await new Promise(resolve => setTimeout(resolve, 250))
     writeFileSync(join(app.getPath('userData'), 'calendar.png'), (await win.webContents.capturePage()).toPNG())
     await run('[...document.querySelectorAll("nav button")].find(node => node.innerText.includes("课程资料")).click()')
-    await until('document.querySelectorAll(".resource-course").length === 2')
-    assert.equal(await run('document.querySelectorAll(".filter-pill").length >= 6 && document.body.innerText.includes("一键全下")'), true, 'Materials filter pills and batch download controls render')
+    await until('document.querySelectorAll(".resource-course").length === 2 && document.querySelector(".materials-sync-alert") !== null')
+    assert.equal(await run('document.querySelectorAll(".filter-pill").length >= 8 && document.querySelector(".materials-storage-bar") !== null && document.querySelector(".one-click-sync-btn") !== null && document.querySelector(".updated-resource-badge") !== null && document.body.innerText.includes("D:/HKU_Courses") && document.body.innerText.includes("一键全下")'), true, 'Materials storage bar, update alert banner, one-click sync CTA, and batch download controls render')
     await run('document.querySelector(".resource-row button").click()')
     await until('window.downloadClicked !== undefined')
     assert.equal(await run('window.downloadClicked'), resource)
