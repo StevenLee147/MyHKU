@@ -133,3 +133,29 @@ Android 首版只在应用前台执行上述刷新，不要求 WorkManager 或�
 仓库中的 `bridge/cdp.mjs` 提供一个可运行的桌面连接器，用于在原生壳层完成之前验证真实账号链路。它用 Node 22 内置 `WebSocket` 连接一个带独立持久化 profile 的可见 Chrome，打开 Moodle 和 Student Portal 官方入口，等待用户亲自完成 SSO/MFA，然后在允许的 HKU 页面上执行与扩展相同的只读 DOM 适配器，并将规范化数据写入本地 bridge。连接器只保留页面的可见字段；不会读取密码值、Cookie、localStorage、Authorization header、原始 HTML 或认证 URL 查询参数。`--once` 用于一次性验收，默认运行期间仅检查登录状态，已登录页面按日刷新。
 
 这条 CDP 路径不会尝试接管用户的普通 Chrome profile；默认 profile 位于 `.myhku/chrome-profile`，可用 `--profile` 指定。需要连接已由用户用远程调试参数启动的浏览器时使用 `--no-launch --port <n>`。正式桌面应用由 Electron/WebView 使用自身受限会话容器；CDP 连接器作为开发和实机验证工具，不能替代平台的系统安全存储实现。
+
+## 10. 阶段性演进摘要（v0.4.0-beta 至 v0.4.4-beta，2026-11-23）
+
+### 近期核心变更
+
+- **全量课程发现与子班可见性管理**：`extension/content.js` 结合 Moodle `core_course_get_enrolled_courses_by_timeline_classification`（支持 `nextoffset` 自动分页）、`/my/courses.php` 与 `/user/profile.php?showallcourses=1` 兜底发现完整已选课程，前端 `src/services/moodleCourses.ts` 提供 Subclass / 系统培训识别与可见性过滤。
+- **课程资料智能归档与版本检测**：`desktop/downloads.mjs` 与 `src/services/materials.ts` 支持自定义资料总目录、按「课程代码 / 分类」自动建夹复用、本地目录递归索引、远端修订号 / `ETag` / `Last-Modified` 探测及原子覆盖更新。
+- **桌面端主进程直连桥接与两阶段渐进同步（v0.4.4-beta）**：解除此前渲染层 `fetch(..., { keepalive: true })` 在全量课程负载超过 64 KiB 时的 Chromium 拒绝问题，改为由 Electron 主进程读取只读提取结果并投递至本地桥接，同时先亚秒级同步课程列表再后台并行抓取多章节与概览页资料。
+
+### 架构与数据流影响
+
+```mermaid
+flowchart LR
+    WebView[受限 HKU 官方窗口 / WebView] -->|executeJavaScript 只读提取| Main[Electron 主进程 / Android Bridge]
+    Main -->|阶段 1: 秒级全量课程列表| Bridge[Loopback 加密桥接 127.0.0.1]
+    Main -->|阶段 2: 并行课程与资料完整快照| Bridge
+    Bridge -->|IPC 通知 + GET /api/snapshot| UI[React 仪表盘]
+    UI -->|下载 / 更新探测 IPC| Downloads[桌面原子归档引擎]
+```
+
+### 关键决策、测试覆盖、风险与后续计划
+
+- **关键决策**：桌面端与 CDP、Android 统一抑制页面内跨源回环 POST（`__MYHKU_SKIP_POST__`），由宿主进程转发 JSON，彻底规避浏览器 64 KiB `keepalive` 上限、CSP `connect-src` 与 Local Network Access 拦截；浏览器扩展模式按 60 KB 阈值动态切换 `keepalive` 并声明 `targetAddressSpace: 'loopback'`。
+- **测试验证**：`scripts/moodle-courses.test.mjs`、`scripts/materials-storage.test.mjs`、`scripts/learning-data-browser.mjs` 与 `scripts/desktop-auth-integration.mjs` 覆盖 >64 KiB 多课程（20 门课 / 500+ 资料）桌面端投递、>1,000 项桥接保留、下划线课程代码提取及多级目录归档。
+- **主要风险**：Moodle 5 页面模板或 AJAX 参数未来升级时可能改变字段结构，需持续保留多源回退（AJAX + `/my/courses.php` + `/user/profile.php` + `/course/resources.php`）。
+- **下一步**：持续跟进跨学期归档清理策略与 macOS / Windows 正式代码签名证书接入。

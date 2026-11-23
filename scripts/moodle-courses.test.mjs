@@ -158,6 +158,35 @@ test('bridge preserves Moodle course metadata, courseId, and retains earlier cou
     assert.equal(snap.courses.find(c => c.id === '102').isSubclass, true)
     assert.equal(snap.courses.find(c => c.id === '102').section, '1C3')
     assert.equal(snap.assignments[0].courseId, '102')
+
+    // Large (>64 KiB, >1000 resources) authoritative Moodle sync strips legacy screen-reader prefixes and retains all items
+    const manyCourses = Array.from({ length: 18 }, (_, idx) => ({
+      id: String(2000 + idx),
+      title: idx === 0
+        ? 'Course name CAES1001_1 Academic Communication in English [2026]'
+        : `Course name GLIS${1900 + idx} Interdisciplinary Seminar Course ${idx} [Section 1A, 2026]`,
+    }))
+    const manyResources = Array.from({ length: 1250 }, (_, idx) => {
+      const cIdx = idx % manyCourses.length
+      return {
+        id: String(80000 + idx),
+        title: `Lecture ${idx + 1} Comprehensive Handout and Annotated Presentation Deck.pdf`,
+        course: manyCourses[cIdx].title,
+        courseId: manyCourses[cIdx].id,
+        url: `https://moodle.hku.hk/mod/resource/view.php?id=${80000 + idx}`,
+      }
+    })
+    await postMoodle({
+      replaceFields: ['courses', 'resources'],
+      courses: manyCourses,
+      resources: manyResources,
+    })
+    const fullSnap = await (await fetch(`${bridge.baseUrl}/api/snapshot`)).json()
+    assert.equal(fullSnap.courses.length, 18)
+    assert.equal(fullSnap.resources.length, 1250, 'bridge retains >1000 resources across all enrolled courses')
+    assert.equal(fullSnap.courses[0].title, 'CAES1001_1 Academic Communication in English [2026]')
+    assert.equal(fullSnap.courses[0].code, 'CAES1001', 'underscore-delimited course title backfills CAES1001 code')
+    assert.equal(fullSnap.resources[0].course, 'CAES1001_1 Academic Communication in English [2026]')
   } finally {
     await bridge.close()
   }

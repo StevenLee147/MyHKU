@@ -106,6 +106,33 @@ app.whenReady().then(async () => {
     if (url.hostname === 'moodle.hku.hk') {
       if (url.pathname === '/mod/resource/view.php') return html('<object data="https://moodle.hku.hk/pluginfile.php/123/mod_resource/content/1/fixture.txt"></object>')
       if (url.pathname.startsWith('/pluginfile.php/')) return new Response('Fixture document bytes', { headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="fixture.txt"' } })
+      if (url.pathname === '/lib/ajax/service.php' && url.searchParams.get('sesskey') === 'largeFixtureSess') {
+        const enrolled = Array.from({ length: 20 }, (_, i) => ({
+          id: 3001 + i,
+          fullname: i === 0 ? 'CAES1001_1 Academic Communication in English [2026]' : `GLIS${1901 + i} Foundations Course ${i + 1} [Section 1A, 2026]`,
+          shortname: i === 0 ? 'CAES1001_1_2026' : `GLIS${1901 + i}_1A_2026`,
+          coursecategory: 'Faculty of Business and Economics',
+          viewurl: `https://moodle.hku.hk/course/view.php?id=${3001 + i}`,
+          isfavourite: i < 2,
+          hidden: false,
+        }))
+        return new Response(JSON.stringify([{ error: false, data: { courses: enrolled, nextoffset: 0 } }]), { headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.pathname === '/course/view.php') {
+        const cid = Number(url.searchParams.get('id') || '0')
+        const title = cid === 3001 ? 'CAES1001_1 Academic Communication in English [2026]' : `GLIS${cid - 1100} Foundations Course ${cid - 3000} [Section 1A, 2026]`
+        const items = Array.from({ length: 25 }, (_, r) => {
+          const rid = cid * 100 + r
+          return `<li id="module-${rid}"><a href="/mod/resource/view.php?id=${rid}">Week ${r + 1} Lecture Notes, Comprehensive Reading Pack and Tutorial Slides (${title}).pdf</a></li>`
+        }).join('')
+        return html(`<h1>${title}</h1><ul>${items}</ul>`)
+      }
+      if (['/my/courses.php', '/user/profile.php', '/course/overview.php', '/mod/assign/index.php', '/course/resources.php'].includes(url.pathname)) {
+        return moodleAuthenticated ? html('<div data-region="myoverview"></div>') : new Response('', { status: 404 })
+      }
+      if (url.pathname === '/my/' && url.searchParams.get('large') === '1') {
+        return html('<input type="hidden" name="sesskey" value="largeFixtureSess"><div data-region="myoverview">Enrolled courses</div>')
+      }
       visits.moodle++
       if (url.searchParams.has('authCAS')) {
         moodleAuthenticated = true
@@ -193,6 +220,14 @@ app.whenReady().then(async () => {
   console.log('PASS bridge retains authoritative assignment dates and status across partial refreshes')
   const portalWindow = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('studentportal.hku.hk'))
   const moodleWindow = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('moodle.hku.hk'))
+  await moodleWindow.loadURL('https://moodle.hku.hk/my/?large=1')
+  await until(async () => {
+    const snap = await (await fetch(`${bridgeUrl}/api/snapshot`)).json()
+    return snap.courses.length === 20 && snap.resources.length === 500
+  }, 'desktop main-process ingest of >64 KiB multi-course Moodle payload', 15_000)
+  const moodleBridgeSession = await (await fetch(`${bridgeUrl}/api/session/moodle`)).json()
+  assert.equal(moodleBridgeSession.connected, true, 'bridge records Moodle session connected after multi-course sync')
+  console.log('PASS desktop main-process ingests >64 KiB multi-course Moodle payload (20 courses, 500 resources)')
   const sisWindow = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('sweb.hku.hk'))
   assert.ok(sisWindow.webContents.getURL().includes('/MyWeekly/showTimetable'), 'SIS SSO continues to the official student timetable')
   await sisWindow.webContents.mainFrame.executeJavaScript('document.body.innerHTML = `<iframe src="https://intraweb.hku.hk/slow-frame"></iframe><iframe src="https://sweb.hku.hk/timetable"></iframe>`')

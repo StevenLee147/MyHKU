@@ -14,7 +14,8 @@ import path from 'node:path'
 
 const HOST = '127.0.0.1'
 const PORT = Number.parseInt(process.env.MYHKU_BRIDGE_PORT || '17321', 10)
-const MAX_BODY = 2 * 1024 * 1024
+const MAX_BODY = 8 * 1024 * 1024
+const MAX_ITEMS = 5000
 const CACHE_FILE = process.env.MYHKU_BRIDGE_CACHE_FILE || ''
 const CACHE_KEY = decodeCacheKey(process.env.MYHKU_BRIDGE_CACHE_KEY)
 const SITES = new Set(['portal', 'sis', 'moodle'])
@@ -234,20 +235,38 @@ function normalizeClass(item, index) {
   }
 }
 
+function stripCoursePrefix(value, max = 500) {
+  const cleaned = clean(value, max)
+  if (!cleaned) return undefined
+  const stripped = cleaned
+    .replace(/^(?:(?:Course\s+image|Course\s+is\s+starred|Starred\s+course|Course\s+name|课程图片|課程圖片|星标课程|课程名称)(?:[\s"'：:|-]+|$))+/gi, '')
+    .trim()
+  return stripped || cleaned
+}
+
+function extractCourseCodeFallback(value) {
+  const cleaned = clean(value, 240)
+  if (!cleaned) return undefined
+  const match = cleaned.match(/(?:^|[^A-Za-z0-9])([A-Z]{2,8})\s*[-_]?\s*(\d{3,5}[A-Z]?)(?=$|[^A-Za-z0-9])/i)
+  return match ? `${match[1]}${match[2]}`.toUpperCase() : undefined
+}
+
 function normalizeCourse(item, index) {
   if (!item || typeof item !== 'object') return null
-  const title = clean(item.title || item.name)
+  const title = stripCoursePrefix(item.title || item.name)
   if (!title) return null
   const url = safeUrl(item.url || item.href)
   const isSubclass = bool(item.isSubclass)
   const isNonAcademic = bool(item.isNonAcademic)
   const moodleHidden = bool(item.moodleHidden)
   const starred = bool(item.starred)
+  const shortname = clean(item.shortname, 120)
+  const code = clean(item.code, 80) || extractCourseCodeFallback(shortname) || extractCourseCodeFallback(title)
   return {
     id: idOf(item.id, `course-${index}-${title}`),
     title,
-    ...(clean(item.code) ? { code: clean(item.code, 80) } : {}),
-    ...(clean(item.shortname) ? { shortname: clean(item.shortname, 120) } : {}),
+    ...(code ? { code } : {}),
+    ...(shortname ? { shortname } : {}),
     ...(clean(item.category) ? { category: clean(item.category, 160) } : {}),
     ...(clean(item.section) ? { section: clean(item.section, 60) } : {}),
     ...(clean(item.term) ? { term: clean(item.term, 60) } : {}),
@@ -286,7 +305,7 @@ function normalizeAssignment(item, index) {
   const due = sanitizeBridgeDue(item.due)
   const completed = inferCompletedFromStatus(status, bool(item.completed))
   const courseId = clean(item.courseId, 80)
-  return { id: idOf(item.id, `assignment-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(completed === undefined ? {} : { completed }) }
+  return { id: idOf(item.id, `assignment-${index}-${title}`), title, course: stripCoursePrefix(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), ...(due ? { due } : {}), ...(status ? { submissionStatus: status } : {}), ...(completed === undefined ? {} : { completed }) }
 }
 
 function normalizeResource(item, index) {
@@ -295,7 +314,7 @@ function normalizeResource(item, index) {
   const url = safeUrl(item.url || item.href)
   if (!title || !url) return null
   const courseId = clean(item.courseId, 80)
-  return { id: idOf(item.id, `resource-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), url }
+  return { id: idOf(item.id, `resource-${index}-${title}`), title, course: stripCoursePrefix(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), url }
 }
 
 function normalizeGrade(item, index) {
@@ -303,7 +322,7 @@ function normalizeGrade(item, index) {
   const title = clean(item.title || item.name)
   if (!title) return null
   const courseId = clean(item.courseId, 80)
-  return { id: idOf(item.id, `grade-${index}-${title}`), title, course: clean(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), ...(clean(item.value || item.grade || item.score) ? { value: clean(item.value || item.grade || item.score, 80) } : {}), ...(typeof item.released === 'boolean' ? { released: item.released } : {}) }
+  return { id: idOf(item.id, `grade-${index}-${title}`), title, course: stripCoursePrefix(item.course || item.courseName, 180) || '未提供课程', ...(courseId ? { courseId } : {}), ...(clean(item.value || item.grade || item.score) ? { value: clean(item.value || item.grade || item.score, 80) } : {}), ...(typeof item.released === 'boolean' ? { released: item.released } : {}) }
 }
 
 function normalizeAnnouncement(item, index) {
@@ -316,7 +335,7 @@ function normalizeAnnouncement(item, index) {
   return {
     id: idOf(item.id, `announcement-${index}-${title}`),
     title,
-    course: clean(item.course || item.courseName, 180) || '未提供课程',
+    course: stripCoursePrefix(item.course || item.courseName, 180) || '未提供课程',
     ...(courseId ? { courseId } : {}),
     ...(published ? { published: published.slice(0, 120) } : {}),
     ...(url ? { url } : {}),
@@ -326,7 +345,7 @@ function normalizeAnnouncement(item, index) {
 function normalizeArray(field, value) {
   if (!Array.isArray(value)) return undefined
   const fn = { schedule: normalizeClass, courses: normalizeCourse, assignments: normalizeAssignment, resources: normalizeResource, grades: normalizeGrade, announcements: normalizeAnnouncement }[field]
-  return value.map(fn).filter(Boolean).slice(0, 1000)
+  return value.map(fn).filter(Boolean).slice(0, MAX_ITEMS)
 }
 
 loadEncryptedCache()
@@ -364,13 +383,15 @@ function mergeById(existing, incoming, field) {
         ...(completed !== undefined ? { completed } : {}),
       })
     } else if (prev && field === 'courses') {
-      const title = item.title && (!prev.title || item.title.length >= prev.title.length) ? item.title : prev.title
+      const prevTitle = stripCoursePrefix(prev.title)
+      const nextTitle = stripCoursePrefix(item.title)
+      const title = nextTitle && (!prevTitle || nextTitle.length >= prevTitle.length) ? nextTitle : (prevTitle || item.title || prev.title)
       merged.set(id, { ...prev, ...item, id, title })
     } else {
       merged.set(id, { ...prev, ...item, id })
     }
   }
-  return [...merged.values()].slice(0, 1000)
+  return [...merged.values()].slice(0, MAX_ITEMS)
 }
 
 async function readBody(req) {

@@ -531,11 +531,10 @@
     const existingUrl = p => p?.url || undefined
     for (const c of baseCourses || []) mergeCourseEntry(c)
     const currentUrl = new URL(location.href)
-    const isOverviewRoute = /^\/(?:my(?:\/|$)|index\.php$|\/?$)/i.test(currentUrl.pathname)
     let sesskey = readPageSesskey(document)
     let authoritativeCourses = false
 
-    if (isOverviewRoute && !/^\/my\/courses\.php$/i.test(currentUrl.pathname)) {
+    if (!/^\/my\/courses\.php$/i.test(currentUrl.pathname)) {
       try {
         const myCoursesUrl = `${currentUrl.origin}/my/courses.php`
         const resp = await fetch(myCoursesUrl, { credentials: 'include' })
@@ -553,55 +552,88 @@
     if (sesskey) {
       try {
         const ajaxUrl = `${currentUrl.origin}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=core_course_get_enrolled_courses_by_timeline_classification`
-        const classifications = ['allincludinghidden', 'all', 'inprogress', 'future', 'past']
-        const ajaxResp = await fetch(ajaxUrl, {
-          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(classifications.map((classification, index) => ({
-            index, methodname: 'core_course_get_enrolled_courses_by_timeline_classification',
-            args: { offset: 0, limit: 200, classification, sort: 'fullname' },
-          }))),
-        })
-        if (ajaxResp.ok) {
+        const ingestList = (rawCourses) => {
+          for (const raw of rawCourses) {
+            if (!raw || typeof raw !== 'object') continue
+            const id = clean(String(raw.id ?? ''), 80)
+            const fullname = stripCourseSrPrefix(decodeHtmlText(raw.fullname || raw.displayname || raw.shortname, 300))
+            if (!id || id === '1' || !fullname) continue
+            const shortname = decodeHtmlText(raw.shortname, 120)
+            const category = decodeHtmlText(raw.coursecategory, 160)
+            const meta = extractCourseMeta(fullname, shortname, category)
+            const viewUrl = pageHref({ getAttribute: () => raw.viewurl || `/course/view.php?id=${encodeURIComponent(id)}` }, currentUrl.origin) || `${currentUrl.origin}/course/view.php?id=${encodeURIComponent(id)}`
+            mergeCourseEntry({
+              id, title: fullname, url: viewUrl,
+              ...(meta.code ? { code: meta.code } : {}),
+              ...(shortname ? { shortname } : {}),
+              ...(category ? { category } : {}),
+              ...(meta.section ? { section: meta.section } : {}),
+              ...(meta.term ? { term: meta.term } : {}),
+              ...(meta.isSubclass ? { isSubclass: true } : {}),
+              ...(meta.isNonAcademic ? { isNonAcademic: true } : {}),
+              ...(raw.hidden === true ? { moodleHidden: true } : {}),
+              ...(raw.isfavourite === true ? { starred: true } : {}),
+            })
+          }
+        }
+        const fetchClassificationBatch = async (specs) => {
+          const ajaxResp = await fetch(ajaxUrl, {
+            method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(specs.map((spec, index) => ({
+              index, methodname: 'core_course_get_enrolled_courses_by_timeline_classification',
+              args: { offset: spec.offset || 0, limit: 200, classification: spec.classification, sort: 'fullname' },
+            }))),
+          })
+          if (!ajaxResp.ok) return null
           const rawJson = typeof ajaxResp.json === 'function' ? await ajaxResp.json() : JSON.parse(await ajaxResp.text())
-          if (Array.isArray(rawJson)) {
-            let fullOk = false; let partOk = 0
-            const ingestList = (rawCourses) => {
-              for (const raw of rawCourses) {
-                if (!raw || typeof raw !== 'object') continue
-                const id = clean(String(raw.id ?? ''), 80)
-                const fullname = stripCourseSrPrefix(decodeHtmlText(raw.fullname || raw.displayname || raw.shortname, 300))
-                if (!id || id === '1' || !fullname) continue
-                const shortname = decodeHtmlText(raw.shortname, 120)
-                const category = decodeHtmlText(raw.coursecategory, 160)
-                const meta = extractCourseMeta(fullname, shortname, category)
-                const viewUrl = pageHref({ getAttribute: () => raw.viewurl || `/course/view.php?id=${encodeURIComponent(id)}` }, currentUrl.origin) || `${currentUrl.origin}/course/view.php?id=${encodeURIComponent(id)}`
-                mergeCourseEntry({
-                  id, title: fullname, url: viewUrl,
-                  ...(meta.code ? { code: meta.code } : {}),
-                  ...(shortname ? { shortname } : {}),
-                  ...(category ? { category } : {}),
-                  ...(meta.section ? { section: meta.section } : {}),
-                  ...(meta.term ? { term: meta.term } : {}),
-                  ...(meta.isSubclass ? { isSubclass: true } : {}),
-                  ...(meta.isNonAcademic ? { isNonAcademic: true } : {}),
-                  ...(raw.hidden === true ? { moodleHidden: true } : {}),
-                  ...(raw.isfavourite === true ? { starred: true } : {}),
-                })
+          return Array.isArray(rawJson) ? rawJson : null
+        }
+        const classifications = ['allincludinghidden', 'all', 'inprogress', 'future', 'past']
+        const firstBatch = await fetchClassificationBatch(classifications.map(classification => ({ classification, offset: 0 })))
+        if (firstBatch) {
+          let fullOk = false; let partOk = 0
+          let pendingSpecs = []
+          for (let i = 0; i < firstBatch.length; i += 1) {
+            const item = firstBatch[i]
+            if (!item || item.error !== false || !Array.isArray(item.data?.courses)) continue
+            if (i <= 1) fullOk = true; else partOk += 1
+            ingestList(item.data.courses)
+            const nextOffset = Number(item.data.nextoffset)
+            if (item.data.courses.length >= 200 && Number.isFinite(nextOffset) && nextOffset > 0 && classifications[i]) {
+              pendingSpecs.push({ classification: classifications[i], offset: nextOffset })
+            }
+          }
+          if (fullOk || partOk >= 3) authoritativeCourses = true
+          let pageGuard = 0
+          while (pendingSpecs.length > 0 && pageGuard < 4) {
+            pageGuard += 1
+            const moreBatch = await fetchClassificationBatch(pendingSpecs)
+            if (!moreBatch) break
+            const followUp = []
+            for (let i = 0; i < moreBatch.length; i += 1) {
+              const item = moreBatch[i]
+              const spec = pendingSpecs[i]
+              if (!item || item.error !== false || !Array.isArray(item.data?.courses) || !spec) continue
+              ingestList(item.data.courses)
+              const nextOffset = Number(item.data.nextoffset)
+              if (item.data.courses.length >= 200 && Number.isFinite(nextOffset) && nextOffset > spec.offset) {
+                followUp.push({ classification: spec.classification, offset: nextOffset })
               }
             }
-            for (let i = 0; i < rawJson.length; i += 1) {
-              const item = rawJson[i]
-              if (!item || item.error !== false || !Array.isArray(item.data?.courses)) continue
-              if (i <= 1) fullOk = true; else partOk += 1
-              ingestList(item.data.courses)
-            }
-            if (fullOk || partOk >= 3) authoritativeCourses = true
+            pendingSpecs = followUp
+          }
+        }
+        if (!authoritativeCourses) {
+          const singleAll = await fetchClassificationBatch([{ classification: 'all', offset: 0 }])
+          if (singleAll && singleAll[0]?.error === false && Array.isArray(singleAll[0]?.data?.courses)) {
+            ingestList(singleAll[0].data.courses)
+            authoritativeCourses = true
           }
         }
       } catch (_) { /* optional Moodle AJAX */ }
     }
 
-    if (!authoritativeCourses && isOverviewRoute) {
+    if (!authoritativeCourses) {
       try {
         const profileUrl = `${currentUrl.origin}/user/profile.php?showallcourses=1`
         const profResp = await fetch(profileUrl, { credentials: 'include' })
@@ -639,6 +671,14 @@
 
   async function crawlMoodleCoursePages(baseData) {
     const discovered = await discoverEnrolledMoodleCourses(baseData.courses)
+    if (discovered.courses.length > 0) {
+      deliverAndroid({
+        connected: true,
+        courses: discovered.courses,
+        ...(discovered.authoritativeCourses ? { replaceFields: ['courses'] } : {}),
+        detail: clean(document.title, 240) || location.pathname,
+      })
+    }
     const coursesMap = new Map(discovered.courses.map(item => [item.id, item]))
     const current = new URL(location.href)
     const orderedCourses = [...discovered.courses].sort((a, b) => {
@@ -663,7 +703,7 @@
     if (/\/course\/(view|overview)\.php$/.test(current.pathname) && current.searchParams.has('id')) {
       links.unshift(`${current.origin}/course/view.php?id=${encodeURIComponent(current.searchParams.get('id'))}`)
     }
-    const unique = Array.from(new Set(links)).slice(0, 60)
+    const unique = Array.from(new Set(links)).slice(0, 120)
     const cacheKey = `${unique.join('|')}::${coursesMap.size}`
     const cached = globalThis.__myhkuMoodleCrawlCache
     if (!globalThis.__myhkuForceCrawl && cached && cached.key === cacheKey && Date.now() - cached.at < 60_000) {
@@ -683,6 +723,22 @@
       const index = extra.assignments.findIndex(existing => existing.id === item.id)
       if (index < 0) { seen.assignments.add(item.id); extra.assignments.push(item) }
       else extra.assignments[index] = mergeAssignmentItem(extra.assignments[index], item)
+    }
+    const resourceSelector = 'a[href*="/mod/resource/"], a[href*="/mod/folder/"], a[href*="/mod/url/"], a[href*="/mod/page/"], a[href*="/mod/book/"], .activity a[href*="/pluginfile.php/"], .section a[href*="/pluginfile.php/"], table.generaltable a[href*="/pluginfile.php/"]'
+    const collectDocResources = (rootDoc, base, heading, cidField) => {
+      let added = 0
+      rootDoc.querySelectorAll(resourceSelector).forEach(link => {
+        const href = pageHref(link, base)
+        if (!href || /\/(?:index|edit)\.php\b/i.test(href)) return
+        const title = visibleLabelFromNode(link) || clean(link.textContent) || clean(link.getAttribute('aria-label'))
+        if (!title) return
+        const id = idFrom(link, href, 'resource', `${heading}|${title}`)
+        if (seen.resources.has(id)) return
+        seen.resources.add(id)
+        extra.resources.push({ id, title, course: heading, ...cidField, url: href })
+        added += 1
+      })
+      return added
     }
     let failedCourses = 0
     await runBounded(unique, 6, async (courseUrl) => {
@@ -710,13 +766,7 @@
         }
         const cidField = courseId ? { courseId } : {}
         const pendingDetailLinks = []
-        doc.querySelectorAll('a[href*="/mod/resource/"], a[href*="/mod/folder/"], a[href*="/mod/url/"], a[href*="/mod/page/"]').forEach(link => {
-          const href = pageHref(link, courseUrl); const title = clean(link.textContent) || clean(link.getAttribute('aria-label'))
-          if (!href || !title) return
-          const id = idFrom(link, href, 'resource', `${heading}|${title}`)
-          if (seen.resources.has(id)) return
-          seen.resources.add(id); extra.resources.push({ id, title, course: heading, ...cidField, url: href })
-        })
+        let courseResourcesFound = collectDocResources(doc, courseUrl, heading, cidField)
         doc.querySelectorAll('a[href*="/mod/assign/"], a[href*="assign/view"], a[href*="/mod/quiz/"], a[href*="/mod/turnitintooltwo/"]').forEach(link => {
           const href = pageHref(link, courseUrl)
           if (!href || /\/(?:index|report|edit)\.php\b/i.test(href)) return
@@ -751,17 +801,18 @@
           seen.grades.add(id)
           extra.grades.push({ id, title, course: heading, ...cidField, ...(parsed.value ? { value: parsed.value } : {}), released: parsed.released })
         })
-        // Moodle 5 puts due dates, submission states and grades in the course overview
-        // or mod/assign/index.php, not in the course's activity cards. Match rows by the activity URL id.
+        // Moodle 5 puts due dates, submission states, resources and grades in the course
+        // overview or mod/assign/index.php. Fetch summary endpoints in parallel.
         const summaryUrls = courseId ? [
           new URL(`/course/overview.php?id=${encodeURIComponent(courseId)}`, courseUrl).href,
           new URL(`/mod/assign/index.php?id=${encodeURIComponent(courseId)}`, courseUrl).href,
         ] : []
-        for (const summaryUrl of summaryUrls) {
+        await Promise.all(summaryUrls.map(async summaryUrl => {
           try {
             const overviewResponse = await fetch(summaryUrl, { credentials: 'include' })
-            if (!overviewResponse.ok) continue
+            if (!overviewResponse.ok) return
             const overview = new DOMParser().parseFromString(await overviewResponse.text(), 'text/html')
+            courseResourcesFound += collectDocResources(overview, summaryUrl, heading, cidField)
             overview.querySelectorAll('a[href*="/mod/assign/view.php"], a[href*="/mod/quiz/view.php"], a[href*="/mod/turnitintooltwo/view.php"]').forEach(link => {
               const root = nearest(link); const href = pageHref(link, summaryUrl)
               const title = clean(link.textContent)
@@ -779,6 +830,16 @@
               }
             })
           } catch (_) { /* optional summary endpoint */ }
+        }))
+        if (courseId && courseResourcesFound === 0) {
+          try {
+            const resIndexUrl = new URL(`/course/resources.php?id=${encodeURIComponent(courseId)}`, courseUrl).href
+            const resIndexResp = await fetch(resIndexUrl, { credentials: 'include' })
+            if (resIndexResp.ok) {
+              const resDoc = new DOMParser().parseFromString(await resIndexResp.text(), 'text/html')
+              collectDocResources(resDoc, resIndexUrl, heading, cidField)
+            }
+          } catch (_) { /* optional resources index fallback */ }
         }
         // For assignments still missing due date or submission status, inspect up to 6 individual assign view pages.
         const unresolved = pendingDetailLinks.filter(candidate => {
@@ -1230,6 +1291,23 @@
     } catch (_) { /* optional Android WebView interface */ }
   }
 
+  async function postBridgeFromPage(payloadObj) {
+    if (globalThis.__MYHKU_SKIP_POST__) return
+    try {
+      const body = JSON.stringify(payloadObj)
+      const byteLength = typeof TextEncoder === 'function' ? new TextEncoder().encode(body).byteLength : body.length * 2
+      await fetch(BRIDGE + site, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body,
+        // Chromium rejects fetch() with keepalive:true whenever body exceeds 64 KiB.
+        keepalive: byteLength <= 60_000,
+        targetAddressSpace: 'loopback',
+      })
+    } catch (_) { /* bridge may be stopped; the next page load retries */ }
+  }
+
   async function publish() {
     // A visible login form means the current page is not authenticated.
     const loginPage = document.querySelector('input[type="password"]') ||
@@ -1238,12 +1316,19 @@
     if (loginPage) {
       const disconnectedPayload = { connected: false, detail: clean(document.title, 240) || location.pathname }
       deliverAndroid(disconnectedPayload)
-      if (!globalThis.__MYHKU_SKIP_POST__) {
-        try {
-          await fetch(BRIDGE + site, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(disconnectedPayload), keepalive: true })
-        } catch (_) { /* bridge may be stopped; the next page load retries */ }
-      }
+      await postBridgeFromPage(disconnectedPayload)
       return disconnectedPayload
+    }
+    if (site === 'moodle' && globalThis.__MYHKU_COURSES_ONLY__) {
+      const discovered = await discoverEnrolledMoodleCourses(extractCoursesFromDocument(document, location.href))
+      const quickFields = {
+        courses: discovered.courses,
+        ...(discovered.authoritativeCourses && discovered.courses.length > 0 ? { replaceFields: ['courses'] } : {}),
+        detail: clean(document.title, 240) || location.pathname,
+      }
+      deliverAndroid({ connected: true, ...quickFields })
+      await postBridgeFromPage(quickFields)
+      return { connected: true, ...quickFields }
     }
     const data = site === 'moodle'
       ? await crawlMoodleCoursePages(extractMoodle())
@@ -1269,11 +1354,7 @@
     // when a valid page contains no rows (for example an empty course list).
     fields.detail = clean(document.title, 240) || location.pathname
     deliverAndroid({ connected: true, ...fields })
-    if (!globalThis.__MYHKU_SKIP_POST__) {
-      try {
-        await fetch(BRIDGE + site, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(fields), keepalive: true })
-      } catch (_) { /* bridge may be stopped; the next page load retries */ }
-    }
+    await postBridgeFromPage(fields)
     return { connected: true, ...fields }
   }
 

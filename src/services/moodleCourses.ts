@@ -132,17 +132,27 @@ export function isCourseVisibleWithPrefs(
   return true
 }
 
+function stripLegacyCourseSrPrefix(raw: string): string {
+  const trimmed = String(raw || '').trim()
+  const stripped = trimmed
+    .replace(/^(?:(?:Course\s+image|Course\s+is\s+starred|Starred\s+course|Course\s+name|课程图片|課程圖片|星标课程|课程名称)(?:[\s"'：:|-]+|$))+/gi, '')
+    .trim()
+  return stripped || trimmed
+}
+
 export function enrichMoodleCourses(
   courses: LiveCourse[],
   prefs: MoodleCoursePrefs = defaultMoodleCoursePrefs(),
 ): EnrichedMoodleCourse[] {
   const preliminary = courses.map(c => {
-    const { code, section, term } = extractCourseSectionAndTerm(c)
-    const combined = `${c.shortname || ''} ${c.title || ''}`
+    const cleanTitle = stripLegacyCourseSrPrefix(c.title)
+    const normalizedCourse = { ...c, title: cleanTitle }
+    const { code, section, term } = extractCourseSectionAndTerm(normalizedCourse)
+    const combined = `${c.shortname || ''} ${cleanTitle}`
     const explicitSubclass = Boolean(c.isSubclass) || SUBCLASS_REGEX.test(combined)
     const nonAcademic = Boolean(c.isNonAcademic) || NON_ACADEMIC_REGEX.test(`${combined} ${c.category || ''}`)
     return {
-      ...c,
+      ...normalizedCourse,
       ...(code ? { code } : {}),
       ...(section ? { section } : {}),
       ...(term ? { term } : {}),

@@ -25,6 +25,8 @@ async function loadTsModule(relPath) {
 test('extractCourseFolderName and classifyBglisCategory align with BGLIS folder taxonomy', () => {
   assert.equal(extractCourseFolderName('GLIS1901-1A Foundations of Quantitative Analysis'), 'GLIS1901')
   assert.equal(extractCourseFolderName('CAES1001-1C3 Academic Communication'), 'CAES1001')
+  assert.equal(extractCourseFolderName('CAES1001_1 Academic Communication in English [2026]'), 'CAES1001')
+  assert.equal(extractCourseFolderName('GLIS1901_1A_2026 Foundations of Global Studies'), 'GLIS1901')
   assert.equal(extractCourseFolderName('CAES9920-1R Academic English'), 'CAES9920')
   assert.equal(extractCourseFolderName('GLIS1903 Foundations of Economics'), 'GLIS1903')
 

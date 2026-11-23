@@ -338,11 +338,27 @@ function startBridge() {
   bridgeProcess.once('error', error => dialog.showErrorBox('MyHKU bridge', error.message))
 }
 
-function connectorScript() {
-  const source = readFileSync(connectorFile, 'utf8').replace('http://127.0.0.1:17321/api/ingest/', `http://127.0.0.1:${bridgePort}/api/ingest/`)
+function connectorScript({ coursesOnly = false } = {}) {
+  const source = readFileSync(connectorFile, 'utf8').trim().replace(/;$/, '')
   // The extension script self-selects the current HKU host and only reads
-  // rendered DOM fields. It never accesses cookies, storage or password input.
-  return `${source}\n//# sourceURL=myhku-hku-connector.js`
+  // rendered DOM fields. Suppress browser-side loopback POST in Electron and
+  // forward the resolved normalized payload from the Node main process so
+  // multi-course payloads (>64 KiB) never hit Chromium fetch keepalive/CSP/LNA limits.
+  return `(async () => {
+    const prevSkip = globalThis.__MYHKU_SKIP_POST__;
+    const prevCoursesOnly = globalThis.__MYHKU_COURSES_ONLY__;
+    globalThis.__MYHKU_SKIP_POST__ = true;
+    globalThis.__MYHKU_COURSES_ONLY__ = ${coursesOnly ? 'true' : 'false'};
+    try {
+      const result = await (\n${source}\n);
+      return result;
+    } finally {
+      if (prevSkip === undefined) delete globalThis.__MYHKU_SKIP_POST__;
+      else globalThis.__MYHKU_SKIP_POST__ = prevSkip;
+      if (prevCoursesOnly === undefined) delete globalThis.__MYHKU_COURSES_ONLY__;
+      else globalThis.__MYHKU_COURSES_ONLY__ = prevCoursesOnly;
+    }
+  })()\n//# sourceURL=myhku-hku-connector.js`
 }
 
 function notifyDashboard() {
@@ -350,11 +366,65 @@ function notifyDashboard() {
   dashboard.webContents.send('myhku-hku-updated', { at: new Date().toISOString() })
 }
 
+async function postBridgeIngest(site, payload) {
+  if (!site || !payload || typeof payload !== 'object') return false
+  const body = JSON.stringify(payload)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${bridgePort}/api/ingest/${site}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      })
+      return response.ok
+    } catch {
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 150))
+    }
+  }
+  return false
+}
+
+const activeFramePublishes = new WeakMap()
+
 async function publishPage(frame) {
-  try {
-    await frame.executeJavaScript(connectorScript(), true)
-    notifyDashboard()
-  } catch { /* navigation can destroy the old document */ }
+  if (!frame) return
+  const existing = activeFramePublishes.get(frame)
+  if (existing) {
+    existing.rerun = true
+    return existing.promise
+  }
+  const state = { rerun: false, promise: null }
+  const runOnce = async () => {
+    const site = serviceForUrl(frame.url)
+    if (!site) return
+    if (site === 'moodle') {
+      try {
+        const quick = await frame.executeJavaScript(connectorScript({ coursesOnly: true }), true)
+        if (quick && typeof quick === 'object' && await postBridgeIngest(site, quick)) {
+          notifyDashboard()
+        }
+      } catch { /* fall through to full crawl */ }
+    }
+    const payload = await frame.executeJavaScript(connectorScript({ coursesOnly: false }), true)
+    if (payload && typeof payload === 'object' && await postBridgeIngest(site, payload)) {
+      notifyDashboard()
+    }
+  }
+  state.promise = (async () => {
+    try {
+      do {
+        state.rerun = false
+        try {
+          await runOnce()
+        } catch { /* navigation can destroy the old document; rerun if queued */ }
+      } while (state.rerun)
+    } finally {
+      activeFramePublishes.delete(frame)
+    }
+  })()
+  activeFramePublishes.set(frame, state)
+  return state.promise
 }
 
 async function inspectFrame(frame, code) {
@@ -476,7 +546,10 @@ function attachConnector(win, record) {
           published = true
           if (finishedLoading) publishedFinal = true
           void publishPage(mainFrame)
-          for (const frame of serviceFrames(win, record?.site || serviceForUrl(current))) void publishPage(frame)
+          const activeSite = record?.site || serviceForUrl(current)
+          if (activeSite && activeSite !== 'moodle') {
+            for (const frame of serviceFrames(win, activeSite)) void publishPage(frame)
+          }
         }
         // SIS login is already complete. Opening its timetable must never
         // keep Moodle waiting or turn a connected session back into checking.
@@ -842,6 +915,10 @@ handleDashboard('myhku-login-site', (_event, site) => {
 handleDashboard('myhku-refresh-hku', () => {
   if (readAccount()) {
     for (const site of Object.keys(SERVICE_URLS)) auth.request(site, { refresh: true })
+  } else {
+    for (const [site, record] of auth.records.entries()) {
+      if (record.state === 'connected') auth.request(site, { refresh: true })
+    }
   }
   return authWindows.size
 })

@@ -202,7 +202,7 @@ export function recordLocalDownloadedPaths(key: string, paths: string[]): Record
 
 export function extractCourseCodeFolder(courseText: string): string {
   const text = String(courseText || '').trim()
-  const codeMatch = text.match(/\b([A-Z]{3,6})\s*-?\s*(\d{4}[A-Z]?)(?:-[0-9A-Z]+)?\b/i)
+  const codeMatch = text.match(/(?:^|[^A-Za-z0-9])([A-Z]{2,8})\s*[-_]?\s*(\d{3,5}[A-Z]?)(?=$|[^A-Za-z0-9])/i)
   if (codeMatch) return `${codeMatch[1].toUpperCase()}${codeMatch[2].toUpperCase()}`
   const cleaned = text.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 72)
   return cleaned || 'Uncategorized_Course'
