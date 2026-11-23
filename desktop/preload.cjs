@@ -8,8 +8,42 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
   version: process.versions.electron,
   refreshHku: () => ipcRenderer.invoke('myhku-refresh-hku'),
   downloadResource: (url) => ipcRenderer.invoke('myhku-download-resource', String(url)),
-  downloadResourceDetailed: (url) => ipcRenderer.invoke('myhku-download-resource-detailed', String(url)),
+  downloadResourceDetailed: (request) => ipcRenderer.invoke(
+    'myhku-download-resource-detailed',
+    request && typeof request === 'object'
+      ? {
+          url: String(request.url || ''),
+          course: typeof request.course === 'string' ? request.course : '',
+          title: typeof request.title === 'string' ? request.title : '',
+          organizeMode: typeof request.organizeMode === 'string' ? request.organizeMode : '',
+          replaceExisting: Boolean(request.replaceExisting),
+          targetFilePath: typeof request.targetFilePath === 'string' ? request.targetFilePath : '',
+        }
+      : String(request || ''),
+  ),
   getDownloadedIndex: () => ipcRenderer.invoke('myhku-get-downloaded-index'),
+  getStorageConfig: () => ipcRenderer.invoke('myhku-get-storage-config'),
+  setStorageConfig: (config) => ipcRenderer.invoke('myhku-set-storage-config', {
+    ...(typeof config?.storageDir === 'string' ? { storageDir: config.storageDir } : {}),
+    ...(typeof config?.organizeMode === 'string' ? { organizeMode: config.organizeMode } : {}),
+  }),
+  chooseStorageDirectory: (options) => ipcRenderer.invoke('myhku-choose-storage-dir', {
+    apply: options?.apply !== false,
+    organizeMode: typeof options?.organizeMode === 'string' ? options.organizeMode : undefined,
+  }),
+  openStorageDirectory: () => ipcRenderer.invoke('myhku-open-storage-dir'),
+  scanStorageDirectory: () => ipcRenderer.invoke('myhku-scan-storage-dir'),
+  checkResourceUpdates: (items) => ipcRenderer.invoke(
+    'myhku-check-resource-updates',
+    Array.isArray(items)
+      ? items.slice(0, 60).map(item => ({
+          id: String(item?.id || ''),
+          url: String(item?.url || ''),
+          localSize: typeof item?.localSize === 'number' ? item.localSize : undefined,
+          localMtimeMs: typeof item?.localMtimeMs === 'number' ? item.localMtimeMs : undefined,
+        }))
+      : [],
+  ),
   getDesktopPrefs: () => ipcRenderer.invoke('myhku-get-desktop-prefs'),
   setDesktopPrefs: (prefs) => ipcRenderer.invoke('myhku-set-desktop-prefs', { minimizeToTray: Boolean(prefs?.minimizeToTray) }),
   updateTraySummary: (summary) => ipcRenderer.invoke('myhku-update-tray-summary', {

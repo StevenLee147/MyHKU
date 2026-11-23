@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { Activity, AppWindow, Bell, CircleAlert, DatabaseBackup, Download, ExternalLink, Globe, KeyRound, Link2, LogIn, LogOut, Monitor, Moon, RefreshCw, ShieldCheck, Sparkles, Sun, Upload } from 'lucide-react'
+import { Activity, AppWindow, Bell, CircleAlert, DatabaseBackup, Download, ExternalLink, FolderOpen, Globe, KeyRound, Link2, LogIn, LogOut, Monitor, Moon, RefreshCw, ShieldCheck, Sparkles, Sun, Upload } from 'lucide-react'
+import '../materials-manager.css'
 import { LegalSettings } from '../legal'
+import {
+  getWebFallbackStoragePrefs,
+  ORGANIZE_MODE_LABELS,
+  setWebFallbackStoragePrefs,
+  type OrganizeMode,
+} from '../services/materials'
 import {
   checkAllConnections,
   checkConnection,
@@ -632,8 +639,191 @@ export function SettingsPage({
         </div>
       </section>
 
+      <StorageSettingsSection locale={locale} onNotice={onNotice} />
+
       <LegalSettings />
     </div>
+  )
+}
+
+function StorageSettingsSection({
+  locale,
+  onNotice,
+}: {
+  locale: Locale
+  onNotice: (message: string) => void
+}) {
+  const desktopAvailable = Boolean(window.myhkuDesktop?.getStorageConfig)
+  const [storageDir, setStorageDir] = useState('')
+  const [effectiveDir, setEffectiveDir] = useState('')
+  const [isCustom, setIsCustom] = useState(false)
+  const [organizeMode, setOrganizeMode] = useState<OrganizeMode>(() => getWebFallbackStoragePrefs().organizeMode)
+  const [scannedStats, setScannedStats] = useState<{ courses: number; files: number } | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      if (!window.myhkuDesktop?.getStorageConfig) return
+      try {
+        const cfg = await window.myhkuDesktop.getStorageConfig()
+        if (!active || !cfg) return
+        setStorageDir(cfg.storageDir)
+        setEffectiveDir(cfg.effectiveDir)
+        setIsCustom(cfg.isCustom)
+        setOrganizeMode(cfg.organizeMode)
+        const scan = await window.myhkuDesktop.scanStorageDirectory?.()
+        if (active && scan) setScannedStats({ courses: scan.courses.length, files: scan.files.length })
+      } catch {
+        /* ignore */
+      }
+    }
+    void load()
+    return () => { active = false }
+  }, [])
+
+  const handlePickDir = async () => {
+    if (!window.myhkuDesktop?.chooseStorageDirectory) {
+      onNotice(tr(locale, '自定义本地储存目录需在 MyHKU 桌面端中使用', 'Custom local storage directory requires MyHKU Desktop'))
+      return
+    }
+    try {
+      const res = await window.myhkuDesktop.chooseStorageDirectory({ apply: true, organizeMode })
+      if (res.canceled) return
+      setStorageDir(res.storageDir)
+      setEffectiveDir(res.effectiveDir)
+      setIsCustom(res.isCustom)
+      const scan = await window.myhkuDesktop.scanStorageDirectory?.()
+      if (scan) setScannedStats({ courses: scan.courses.length, files: scan.files.length })
+      onNotice(
+        tr(
+          locale,
+          `已将课程资料目录设为：${res.effectiveDir}`,
+          `Course materials folder set to: ${res.effectiveDir}`,
+        ),
+      )
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : tr(locale, '无法更改储存目录', 'Failed to change directory'))
+    }
+  }
+
+  const handleResetDefault = async () => {
+    if (!window.myhkuDesktop?.setStorageConfig) return
+    try {
+      const res = await window.myhkuDesktop.setStorageConfig({ storageDir: '' })
+      setStorageDir(res.storageDir)
+      setEffectiveDir(res.effectiveDir)
+      setIsCustom(res.isCustom)
+      const scan = await window.myhkuDesktop.scanStorageDirectory?.()
+      if (scan) setScannedStats({ courses: scan.courses.length, files: scan.files.length })
+      onNotice(tr(locale, '已恢复默认课程资料储存目录', 'Restored default materials storage directory'))
+    } catch {
+      onNotice(tr(locale, '恢复默认目录失败', 'Failed to reset storage directory'))
+    }
+  }
+
+  const handleModeChange = async (nextMode: OrganizeMode) => {
+    setOrganizeMode(nextMode)
+    setWebFallbackStoragePrefs(nextMode)
+    if (window.myhkuDesktop?.setStorageConfig) {
+      try {
+        const res = await window.myhkuDesktop.setStorageConfig({ organizeMode: nextMode })
+        setEffectiveDir(res.effectiveDir)
+      } catch {
+        /* ignore */
+      }
+    }
+    onNotice(
+      tr(
+        locale,
+        `已切换归档模式：${ORGANIZE_MODE_LABELS[nextMode].zh}`,
+        `Archive mode: ${ORGANIZE_MODE_LABELS[nextMode].en}`,
+      ),
+    )
+  }
+
+  return (
+    <section className="panel settings-card storage-settings-card">
+      <div className="panel-head">
+        <div>
+          <h2>
+            <FolderOpen size={15} /> {tr(locale, '课程资料储存目录与自动归档', 'Course Materials Storage & Auto-Archive')}
+          </h2>
+          <p>
+            {tr(
+              locale,
+              '自定义课程总目录并按「课程代码 / 资料分类」自动建夹归档，支持扫描现有课程目录比对新增与更新文件。',
+              'Choose a custom root folder to auto-organize files by Course Code / Category and detect new or updated Moodle files.',
+            )}
+          </p>
+        </div>
+        <div className="account-manage-actions">
+          <button type="button" className="primary-btn" onClick={() => void handlePickDir()}>
+            <FolderOpen size={14} /> {tr(locale, isCustom ? '更改储存目录' : '选择储存目录', isCustom ? 'Change Folder' : 'Choose Folder')}
+          </button>
+          {desktopAvailable && (
+            <button
+              type="button"
+              className="outline-btn"
+              onClick={() => void window.myhkuDesktop?.openStorageDirectory?.()}
+            >
+              {tr(locale, '打开目录', 'Open Folder')} <ExternalLink size={12} />
+            </button>
+          )}
+          {isCustom && (
+            <button type="button" className="outline-btn" onClick={() => void handleResetDefault()}>
+              {tr(locale, '恢复默认', 'Reset Default')}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="storage-settings-body">
+        <div className="storage-path-box">
+          <div>
+            <small style={{ display: 'block', color: 'var(--text-muted)', fontSize: '11px' }}>
+              {isCustom
+                ? tr(locale, '当前自定义课程总目录：', 'Custom root directory:')
+                : tr(locale, '当前储存路径（未自定义时使用默认目录）：', 'Active storage directory (default):')}
+            </small>
+            <code>{effectiveDir || storageDir || tr(locale, '系统下载目录 / MyHKU', 'Downloads / MyHKU')}</code>
+          </div>
+          {scannedStats && (
+            <span className="storage-mode-pill">
+              {tr(
+                locale,
+                `已识别 ${scannedStats.courses} 门课程目录 · ${scannedStats.files} 个本地文件`,
+                `${scannedStats.courses} course folders · ${scannedStats.files} local files`,
+              )}
+            </span>
+          )}
+        </div>
+        <div className="settings-switches" style={{ padding: 0 }}>
+          <div className="mode-switch" role="group" aria-label={tr(locale, '文件夹归档结构', 'Folder Structure')}>
+            <span>{tr(locale, '归档结构', 'Structure')}</span>
+            {(['bglis', 'course', 'flat'] as OrganizeMode[]).map(opt => (
+              <button
+                key={opt}
+                type="button"
+                className={organizeMode === opt ? 'selected' : ''}
+                title={locale === 'en' ? ORGANIZE_MODE_LABELS[opt].hintEn : ORGANIZE_MODE_LABELS[opt].hintZh}
+                onClick={() => void handleModeChange(opt)}
+              >
+                {locale === 'en' ? ORGANIZE_MODE_LABELS[opt].en : ORGANIZE_MODE_LABELS[opt].zh}
+              </button>
+            ))}
+          </div>
+        </div>
+        <details className="storage-taxonomy-details">
+          <summary>{tr(locale, '查看「课程 + 分类归档」目录规则说明', 'View Course + Category folder mapping rules')}</summary>
+          <p>
+            {tr(
+              locale,
+              '一级目录按课程代码自动命名（如 GLIS1901、GLIS1903、CAES9920）；二级目录自动识别 Course Information、Lecture Notes / Lecture Slides、Tutorials、Python Labs、Assignments、Study_Guides、Mock Exam、Quiz Review、Seminar、Final Project，并优先复用课程文件夹下已有的同名或近义子目录（例如已有 Tutorial 或 Lecture Slides 时不会重复建夹）。',
+              'Level 1 uses clean HKU course codes (e.g. GLIS1901, CAES9920); Level 2 classifies files into Course Information, Lecture Notes / Lecture Slides, Tutorials, Python Labs, Assignments, Study_Guides, Mock Exam, Quiz Review, Seminar, and Final Project while reusing existing matching subfolders.',
+            )}
+          </p>
+        </details>
+      </div>
+    </section>
   )
 }
 // end SettingsPage

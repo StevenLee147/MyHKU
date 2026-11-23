@@ -1,7 +1,67 @@
 /// <reference types="vite/client" />
 declare const __MYHKU_APP_VERSION__: string | undefined
 type DesktopSessions = Record<'portal' | 'sis' | 'moodle', { state: string; detail?: string; checkedAt?: string; revision?: number }>
-type DesktopDownloadResult = { count: number; paths: string[]; directory: string }
+type StorageOrganizeMode = 'bglis' | 'course' | 'flat'
+type DesktopStorageConfig = {
+  storageDir: string
+  defaultDir: string
+  effectiveDir: string
+  organizeMode: StorageOrganizeMode
+  isCustom: boolean
+}
+type ScannedLocalCourseFile = {
+  path: string
+  relativePath: string
+  courseFolder: string
+  categoryFolder: string
+  filename: string
+  normalizedKey: string
+  size: number
+  mtimeMs: number
+}
+type DownloadedResourceMeta = {
+  paths: string[]
+  signature?: string
+  etag?: string
+  lastModified?: string
+  contentLength?: number
+  sha256?: string
+  revision?: number
+  filename?: string
+  updatedAt?: string
+}
+type DesktopStorageScanResult = {
+  root: string
+  exists: boolean
+  courses: string[]
+  files: ScannedLocalCourseFile[]
+  downloadedMeta?: Record<string, DownloadedResourceMeta>
+}
+type RemoteResourceUpdateInfo = {
+  signature: string
+  filename?: string
+  revision?: number
+  lastModified?: string
+  contentLength?: number
+  hasRemoteUpdate: boolean
+  reason?: string
+  checkedAt: string
+}
+type DesktopDownloadRequest = string | {
+  url: string
+  course?: string
+  title?: string
+  organizeMode?: StorageOrganizeMode
+  replaceExisting?: boolean
+  targetFilePath?: string
+}
+type DesktopDownloadResult = {
+  count: number
+  paths: string[]
+  directory: string
+  signature?: string
+  files?: Array<{ path: string; filename: string; courseFolder?: string; categoryFolder?: string; size?: number }>
+}
 interface Window {
   myhkuDesktop?: {
     legalStatus?: () => Promise<{ accepted: boolean; version: string }>
@@ -11,8 +71,14 @@ interface Window {
     version?: string
     refreshHku?: () => Promise<number>
     downloadResource?: (url: string) => Promise<number>
-    downloadResourceDetailed?: (url: string) => Promise<DesktopDownloadResult>
+    downloadResourceDetailed?: (request: DesktopDownloadRequest) => Promise<DesktopDownloadResult>
     getDownloadedIndex?: () => Promise<Record<string, string[]>>
+    getStorageConfig?: () => Promise<DesktopStorageConfig>
+    setStorageConfig?: (config: { storageDir?: string; organizeMode?: StorageOrganizeMode }) => Promise<DesktopStorageConfig>
+    chooseStorageDirectory?: (options?: { apply?: boolean; organizeMode?: StorageOrganizeMode }) => Promise<DesktopStorageConfig & { canceled?: boolean }>
+    openStorageDirectory?: () => Promise<boolean>
+    scanStorageDirectory?: () => Promise<DesktopStorageScanResult>
+    checkResourceUpdates?: (items: Array<{ id: string; url: string; localSize?: number; localMtimeMs?: number }>) => Promise<Record<string, RemoteResourceUpdateInfo>>
     getDesktopPrefs?: () => Promise<{ minimizeToTray: boolean; trayAvailable: boolean }>
     setDesktopPrefs?: (prefs: { minimizeToTray: boolean }) => Promise<{ minimizeToTray: boolean; trayAvailable: boolean }>
     updateTraySummary?: (summary: { nextClass?: string; nextDdl?: string }) => Promise<boolean>

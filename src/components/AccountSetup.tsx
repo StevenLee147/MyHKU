@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from 'react'
-import { LogIn, RefreshCw, ShieldCheck, X } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { FolderOpen, LogIn, RefreshCw, ShieldCheck, X } from 'lucide-react'
+import '../materials-manager.css'
 
 function isValidHkuEmail(raw: string): boolean {
   const lower = raw.trim().toLowerCase()
@@ -22,8 +23,37 @@ export function AccountSetup({
   const [username, setUsername] = useState(initialUsername)
   const [email, setEmail] = useState(initialEmail)
   const [password, setPassword] = useState('')
+  const [storageDir, setStorageDir] = useState('')
+  const [defaultStorageDir, setDefaultStorageDir] = useState('')
+  const [useBglisTree, setUseBglisTree] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    window.myhkuDesktop?.getStorageConfig?.().then(cfg => {
+      if (!active || !cfg) return
+      setStorageDir(cfg.storageDir || '')
+      setDefaultStorageDir(cfg.defaultDir || '')
+      setUseBglisTree(cfg.organizeMode !== 'flat')
+    }).catch(() => {})
+    return () => { active = false }
+  }, [])
+
+  const handlePickDirectory = async () => {
+    try {
+      const picked = await window.myhkuDesktop?.chooseStorageDirectory?.({
+        apply: true,
+        organizeMode: useBglisTree ? 'bglis' : 'flat',
+      })
+      if (picked && !picked.canceled) {
+        setStorageDir(picked.storageDir || '')
+        setDefaultStorageDir(picked.defaultDir || defaultStorageDir)
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '无法打开文件夹选择器')
+    }
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -43,6 +73,12 @@ export function AccountSetup({
     }
     setBusy(true)
     try {
+      if (window.myhkuDesktop?.setStorageConfig) {
+        await window.myhkuDesktop.setStorageConfig({
+          storageDir: storageDir.trim(),
+          organizeMode: useBglisTree ? 'bglis' : 'flat',
+        })
+      }
       const result = await save({ localUsername: username.trim(), email: email.trim(), password })
       await window.myhkuDesktop?.beginLogin?.()
       onReady({ username: result.localUsername || username.trim(), email: result.email || email.trim() })
@@ -98,6 +134,29 @@ export function AccountSetup({
             autoComplete="current-password"
           />
         </label>
+        {!modal && (
+          <div className="account-storage-box">
+            <div className="account-storage-head">
+              <span>课程资料储存目录（可选）</span>
+              {Boolean(window.myhkuDesktop?.chooseStorageDirectory) && (
+                <button type="button" className="mini-action-btn" onClick={() => void handlePickDirectory()} disabled={busy}>
+                  <FolderOpen size={12} /> 选择目录…
+                </button>
+              )}
+            </div>
+            <div className="account-storage-path">
+              {storageDir || defaultStorageDir || '默认保存至系统「下载 / MyHKU」目录（进入后可随时在课程资料或设置页修改）'}
+            </div>
+            <label className="account-storage-mode">
+              <input
+                type="checkbox"
+                checked={useBglisTree}
+                onChange={event => setUseBglisTree(event.target.checked)}
+              />
+              按「课程代码 / 资料分类」自动建夹归档（如 GLIS1901 / Lecture Notes、Tutorials）
+            </label>
+          </div>
+        )}
         {error && <p className="account-error" role="alert">{error}</p>}
         <div className="account-form-actions">
           {modal && onCancel && (

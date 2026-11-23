@@ -223,8 +223,32 @@ export function evaluateSnapshotNotifications(
   if (previous) {
     const oldAssignments = new Set((previous.assignments || []).map(item => item.id))
     const oldAnnouncements = new Set((previous.announcements || []).map(item => item.id))
+    const oldResources = new Map((previous.resources || []).map(item => [item.id, item]))
     const oldClasses = new Map((previous.schedule || []).map(item => [item.id, item]))
     const nextClassIds = new Set(next.schedule.map(item => item.id))
+
+    for (const item of next.resources || []) {
+      const prevRes = oldResources.get(item.id)
+      if (!prevRes) {
+        created.push({
+          id: `new-res-${item.id}-${now.getTime()}`,
+          title: '新增课程资料',
+          body: `${item.course}：${item.title}`,
+          target: 'materials',
+          course: item.course,
+          createdAt: nowIso,
+        })
+      } else if (prevRes.title !== item.title || (prevRes.url && item.url && prevRes.url !== item.url)) {
+        created.push({
+          id: `upd-res-${item.id}-${now.getTime()}`,
+          title: '课程资料有更新',
+          body: `${item.course}：${item.title}`,
+          target: 'materials',
+          course: item.course,
+          createdAt: nowIso,
+        })
+      }
+    }
 
     for (const item of next.assignments) {
       if (!oldAssignments.has(item.id) && !item.completed) {

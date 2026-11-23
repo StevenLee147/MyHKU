@@ -1,11 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, session, shell, Tray, webFrameMain } from 'electron'
-import { fileLinksFromHtml, resolveMoodleDownloads, saveMoodleDownload } from './downloads.mjs'
+import { fileLinksFromHtml, probeMoodleResource, resolveMoodleDownloads, saveMoodleDownload, scanStorageDirectory } from './downloads.mjs'
 import { AuthCoordinator, AUTH_TIMING, SERVICE_URLS, inspectAuthPage, serviceForUrl } from './auth-flow.mjs'
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import crypto from 'node:crypto'
-import { dirname, extname, join } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -48,25 +48,41 @@ let dashboard
 const authWindows = new Set()
 const sessionDownloadedPaths = new Set()
 const downloadedIndexByUrl = new Map()
+const downloadedMetaByUrl = new Map()
 let downloadedIndexLoaded = false
 const downloadedIndexFile = () => join(app.getPath('userData'), 'myhku-cache-downloads.json')
+const downloadedMetaFile = () => join(app.getPath('userData'), 'myhku-cache-downloads-meta.json')
 
 function ensureDownloadedIndexLoaded() {
   if (downloadedIndexLoaded) return
   downloadedIndexLoaded = true
   try {
     const raw = JSON.parse(readFileSync(downloadedIndexFile(), 'utf8'))
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
-    for (const [url, list] of Object.entries(raw)) {
-      if (!Array.isArray(list)) continue
-      const valid = list.filter(p => typeof p === 'string' && p.length > 0 && existsSync(p))
-      if (valid.length) {
-        downloadedIndexByUrl.set(url, valid)
-        for (const p of valid) sessionDownloadedPaths.add(p)
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [url, list] of Object.entries(raw)) {
+        if (!Array.isArray(list)) continue
+        const valid = list.filter(p => typeof p === 'string' && p.length > 0 && existsSync(p))
+        if (valid.length) {
+          downloadedIndexByUrl.set(url, valid)
+          for (const p of valid) sessionDownloadedPaths.add(p)
+        }
       }
     }
   } catch {
     /* no persisted download index yet */
+  }
+  try {
+    const rawMeta = JSON.parse(readFileSync(downloadedMetaFile(), 'utf8'))
+    if (rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta)) {
+      for (const [url, meta] of Object.entries(rawMeta)) {
+        if (!meta || typeof meta !== 'object') continue
+        const paths = Array.isArray(meta.paths) ? meta.paths.filter(p => typeof p === 'string' && p.length > 0 && existsSync(p)) : []
+        downloadedMetaByUrl.set(url, { ...meta, paths })
+        for (const p of paths) sessionDownloadedPaths.add(p)
+      }
+    }
+  } catch {
+    /* no persisted download meta yet */
   }
 }
 
@@ -77,6 +93,10 @@ function persistDownloadedIndex() {
     const temp = `${downloadedIndexFile()}.${process.pid}.tmp`
     writeFileSync(temp, JSON.stringify(out), { mode: 0o600 })
     renameSync(temp, downloadedIndexFile())
+    const metaOut = Object.fromEntries(downloadedMetaByUrl.entries())
+    const metaTemp = `${downloadedMetaFile()}.${process.pid}.tmp`
+    writeFileSync(metaTemp, JSON.stringify(metaOut), { mode: 0o600 })
+    renameSync(metaTemp, downloadedMetaFile())
   } catch {
     /* non-fatal cache write */
   }
@@ -86,19 +106,32 @@ let desktopPrefsCache
 const traySummary = { nextClass: '', nextDdl: '' }
 const desktopPrefsFile = () => join(app.getPath('userData'), 'myhku-cache-prefs.json')
 
+function normalizeOrganizeMode(value) {
+  return ['bglis', 'course', 'flat'].includes(value) ? value : 'bglis'
+}
+
 function readDesktopPrefs() {
   if (desktopPrefsCache !== undefined) return desktopPrefsCache
   try {
     const raw = JSON.parse(readFileSync(desktopPrefsFile(), 'utf8'))
-    desktopPrefsCache = { minimizeToTray: Boolean(raw?.minimizeToTray) }
+    desktopPrefsCache = {
+      minimizeToTray: Boolean(raw?.minimizeToTray),
+      storageDir: typeof raw?.storageDir === 'string' ? raw.storageDir.trim().slice(0, 512) : '',
+      organizeMode: normalizeOrganizeMode(raw?.organizeMode),
+    }
   } catch {
-    desktopPrefsCache = { minimizeToTray: false }
+    desktopPrefsCache = { minimizeToTray: false, storageDir: '', organizeMode: 'bglis' }
   }
   return desktopPrefsCache
 }
 
 function saveDesktopPrefs(next) {
-  const prefs = { minimizeToTray: Boolean(next?.minimizeToTray) }
+  const current = readDesktopPrefs()
+  const prefs = {
+    minimizeToTray: next?.minimizeToTray !== undefined ? Boolean(next.minimizeToTray) : current.minimizeToTray,
+    storageDir: typeof next?.storageDir === 'string' ? next.storageDir.trim().slice(0, 512) : current.storageDir,
+    organizeMode: next?.organizeMode !== undefined ? normalizeOrganizeMode(next.organizeMode) : current.organizeMode,
+  }
   desktopPrefsCache = prefs
   try {
     mkdirSync(app.getPath('userData'), { recursive: true })
@@ -220,6 +253,7 @@ async function resetAccountSessions() {
   auth.reset()
   sessionDownloadedPaths.clear()
   downloadedIndexByUrl.clear()
+  downloadedMetaByUrl.clear()
   downloadedIndexLoaded = true
   traySummary.nextClass = ''
   traySummary.nextDdl = ''
@@ -228,7 +262,7 @@ async function resetAccountSessions() {
   const official = (await import('electron')).session.fromPartition('persist:myhku-hku')
   await official.clearStorageData()
   await official.clearAuthCache()
-  for (const name of ['myhku-cache.enc.json', 'myhku-cache.key', 'myhku-cache-downloads.json']) {
+  for (const name of ['myhku-cache.enc.json', 'myhku-cache.key', 'myhku-cache-downloads.json', 'myhku-cache-downloads-meta.json']) {
     try { unlinkSync(join(app.getPath('userData'), name)) } catch { /* already absent */ }
   }
   if (servicesStarted) {
@@ -812,36 +846,97 @@ handleDashboard('myhku-refresh-hku', () => {
   return authWindows.size
 })
 
-async function performMoodleDownload(url) {
+function getStorageConfigState() {
+  const prefs = readDesktopPrefs()
+  const defaultDir = join(app.getPath('downloads'), 'MyHKU')
+  const effectiveDir = prefs.storageDir || defaultDir
+  return {
+    storageDir: prefs.storageDir,
+    defaultDir,
+    effectiveDir,
+    organizeMode: prefs.organizeMode,
+    isCustom: Boolean(prefs.storageDir),
+  }
+}
+
+function isAllowedMaterialFile(targetPath) {
+  const raw = String(targetPath || '').trim()
+  if (!raw) return false
+  const resolved = resolvePath(raw)
+  if (sessionDownloadedPaths.has(resolved) || sessionDownloadedPaths.has(raw)) return true
+  const cfg = getStorageConfigState()
+  const root = resolvePath(cfg.effectiveDir)
+  const rel = relative(root, resolved)
+  return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+async function performMoodleDownload(rawRequest) {
+  const isObjectReq = Boolean(rawRequest && typeof rawRequest === 'object')
+  const url = String(isObjectReq ? rawRequest.url : rawRequest || '')
+  const cfg = getStorageConfigState()
+  const legacyFlatCall = !isObjectReq && !cfg.isCustom
+  const organizeMode = legacyFlatCall
+    ? 'flat'
+    : (isObjectReq && rawRequest.organizeMode ? normalizeOrganizeMode(rawRequest.organizeMode) : cfg.organizeMode)
+  const directory = legacyFlatCall || (organizeMode === 'flat' && !cfg.isCustom)
+    ? app.getPath('downloads')
+    : cfg.effectiveDir
+  const replaceExisting = Boolean(isObjectReq && rawRequest.replaceExisting)
+  const safeTargetFile = replaceExisting && isObjectReq && rawRequest.targetFilePath && isAllowedMaterialFile(rawRequest.targetFilePath)
+    ? resolvePath(rawRequest.targetFilePath)
+    : undefined
+
   const authenticated = session.fromPartition('persist:myhku-hku')
   const parser = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
   try {
     await parser.loadURL('about:blank')
     const fetchPage = value => authenticated.fetch(value, { redirect: 'manual', signal: AbortSignal.timeout(120_000) })
-    const urls = await resolveMoodleDownloads(String(url), fetchPage,
+    const urls = await resolveMoodleDownloads(url, fetchPage,
       (html, base) => parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`))
     ensureDownloadedIndexLoaded()
-    const directory = app.getPath('downloads')
     const paths = []
-    for (const file of urls) {
-      const savedPath = await saveMoodleDownload(file, directory, fetchPage)
-      sessionDownloadedPaths.add(savedPath)
-      paths.push(savedPath)
+    const files = []
+    for (let idx = 0; idx < urls.length; idx++) {
+      const detail = await saveMoodleDownload(urls[idx], directory, fetchPage, {
+        course: isObjectReq ? rawRequest.course : '',
+        title: isObjectReq ? rawRequest.title : '',
+        organizeMode,
+        replaceExisting,
+        targetFilePath: idx === 0 ? safeTargetFile : undefined,
+        returnDetailed: true,
+      })
+      sessionDownloadedPaths.add(detail.path)
+      sessionDownloadedPaths.add(resolvePath(detail.path))
+      paths.push(detail.path)
+      files.push(detail)
     }
+    const signature = files.map(f => f.signature || '').join(';;')
     if (paths.length) {
-      downloadedIndexByUrl.set(String(url), paths)
+      downloadedIndexByUrl.set(url, paths)
+      const first = files[0] || {}
+      downloadedMetaByUrl.set(url, {
+        paths,
+        signature,
+        ...(first.etag ? { etag: first.etag } : {}),
+        ...(first.lastModified ? { lastModified: first.lastModified } : {}),
+        ...(first.contentLength ? { contentLength: first.contentLength } : {}),
+        ...(first.sha256 ? { sha256: first.sha256 } : {}),
+        ...(first.revision !== undefined ? { revision: first.revision } : {}),
+        ...(first.filename ? { filename: first.filename } : {}),
+        updatedAt: new Date().toISOString(),
+      })
       persistDownloadedIndex()
     }
-    return { count: paths.length, paths, directory }
+    return { count: paths.length, paths, directory, signature, files: files.map(f => ({ path: f.path, filename: f.filename, courseFolder: f.courseFolder, categoryFolder: f.categoryFolder, size: f.size })) }
   } finally { parser.destroy() }
 }
 
 handleDashboard('myhku-download-resource', async (_event, url) => {
-  const result = await performMoodleDownload(url)
+  const result = await performMoodleDownload(String(url || ''))
   return result.count
 })
 
-handleDashboard('myhku-download-resource-detailed', async (_event, url) => performMoodleDownload(url))
+handleDashboard('myhku-download-resource-detailed', async (_event, request) => performMoodleDownload(request))
 
 handleDashboard('myhku-get-downloaded-index', async () => {
   ensureDownloadedIndexLoaded()
@@ -853,10 +948,139 @@ handleDashboard('myhku-get-downloaded-index', async () => {
   return out
 })
 
+handleDashboard('myhku-get-storage-config', () => getStorageConfigState())
+
+handleDashboard('myhku-set-storage-config', (_event, value) => {
+  const next = {}
+  if (typeof value?.storageDir === 'string') {
+    const trimmed = value.storageDir.trim()
+    if (trimmed) {
+      if (!isAbsolute(trimmed)) throw new Error('储存目录必须是完整的本地绝对路径')
+      mkdirSync(trimmed, { recursive: true })
+    }
+    next.storageDir = trimmed
+  }
+  if (value?.organizeMode !== undefined) {
+    next.organizeMode = normalizeOrganizeMode(value.organizeMode)
+  }
+  saveDesktopPrefs(next)
+  return getStorageConfigState()
+})
+
+handleDashboard('myhku-choose-storage-dir', async (_event, options) => {
+  const current = getStorageConfigState()
+  const startPath = current.storageDir && existsSync(current.storageDir)
+    ? current.storageDir
+    : app.getPath('documents') || app.getPath('downloads')
+  const picked = await dialog.showOpenDialog(dashboard && !dashboard.isDestroyed() ? dashboard : undefined, {
+    title: '选择 MyHKU 课程资料储存目录',
+    defaultPath: startPath,
+    buttonLabel: '设为课程资料目录',
+    properties: ['openDirectory', 'createDirectory'],
+  })
+  if (picked.canceled || !picked.filePaths?.[0]) {
+    return { ...current, canceled: true }
+  }
+  const chosenDir = resolvePath(picked.filePaths[0])
+  mkdirSync(chosenDir, { recursive: true })
+  if (options?.apply !== false) {
+    saveDesktopPrefs({
+      storageDir: chosenDir,
+      ...(options?.organizeMode ? { organizeMode: normalizeOrganizeMode(options.organizeMode) } : {}),
+    })
+  }
+  return { ...getStorageConfigState(), storageDir: chosenDir, effectiveDir: chosenDir, isCustom: true, canceled: false }
+})
+
+handleDashboard('myhku-open-storage-dir', async () => {
+  const cfg = getStorageConfigState()
+  mkdirSync(cfg.effectiveDir, { recursive: true })
+  const errorMessage = await shell.openPath(cfg.effectiveDir)
+  if (errorMessage) throw new Error(errorMessage)
+  return true
+})
+
+handleDashboard('myhku-scan-storage-dir', async () => {
+  ensureDownloadedIndexLoaded()
+  const cfg = getStorageConfigState()
+  const scanned = await scanStorageDirectory(cfg.effectiveDir)
+  for (const item of scanned.files) {
+    sessionDownloadedPaths.add(item.path)
+    sessionDownloadedPaths.add(resolvePath(item.path))
+  }
+  const downloadedMeta = {}
+  for (const [url, meta] of downloadedMetaByUrl.entries()) {
+    const validPaths = Array.isArray(meta.paths) ? meta.paths.filter(p => existsSync(p)) : []
+    downloadedMeta[url] = { ...meta, paths: validPaths }
+  }
+  return { ...scanned, downloadedMeta }
+})
+
+handleDashboard('myhku-check-resource-updates', async (_event, rawItems) => {
+  ensureDownloadedIndexLoaded()
+  const items = Array.isArray(rawItems) ? rawItems.filter(i => i && typeof i.url === 'string' && i.url).slice(0, 60) : []
+  if (!items.length) return {}
+  const authenticated = session.fromPartition('persist:myhku-hku')
+  const parser = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
+  const out = {}
+  try {
+    await parser.loadURL('about:blank')
+    const fetchPage = value => authenticated.fetch(value, { redirect: 'manual', signal: AbortSignal.timeout(20_000) })
+    const parseHtml = (html, base) => parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`)
+    const queue = [...items]
+    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (queue.length) {
+        const entry = queue.shift()
+        if (!entry) break
+        try {
+          const probe = await probeMoodleResource(entry.url, fetchPage, parseHtml)
+          const first = probe.files[0] || {}
+          const savedMeta = downloadedMetaByUrl.get(entry.url)
+          let hasRemoteUpdate = false
+          let reason = ''
+          if (savedMeta?.signature && probe.signature && savedMeta.signature !== probe.signature) {
+            hasRemoteUpdate = true
+            if (first.revision !== undefined && savedMeta.revision !== undefined && first.revision !== savedMeta.revision) {
+              reason = `Moodle 远端文件已升级至第 ${first.revision} 版`
+            } else {
+              reason = 'Moodle 远端文件版本或内容已更新'
+            }
+          } else if (!savedMeta?.signature && probe.files.length === 1 && (typeof entry.localSize === 'number' || typeof entry.localMtimeMs === 'number')) {
+            if (typeof first.contentLength === 'number' && typeof entry.localSize === 'number' && first.contentLength !== entry.localSize) {
+              hasRemoteUpdate = true
+              reason = '远端文件大小与本地文件不一致，存在更新版本'
+            } else if (first.lastModified && typeof entry.localMtimeMs === 'number') {
+              const remoteMs = Date.parse(first.lastModified)
+              if (Number.isFinite(remoteMs) && remoteMs > entry.localMtimeMs + 120_000) {
+                hasRemoteUpdate = true
+                reason = 'Moodle 远端最后修改时间晚于本地文件'
+              }
+            }
+          }
+          out[entry.id || entry.url] = {
+            signature: probe.signature,
+            ...(first.filename ? { filename: first.filename } : {}),
+            ...(first.revision !== undefined ? { revision: first.revision } : {}),
+            ...(first.lastModified ? { lastModified: first.lastModified } : {}),
+            ...(first.contentLength !== undefined ? { contentLength: first.contentLength } : {}),
+            hasRemoteUpdate,
+            ...(reason ? { reason } : {}),
+            checkedAt: probe.checkedAt,
+          }
+        } catch {
+          /* individual unreachable or non-file URL skipped */
+        }
+      }
+    })
+    await Promise.all(workers)
+    return out
+  } finally { parser.destroy() }
+})
+
 handleDashboard('myhku-open-downloaded-file', async (_event, targetPath) => {
   ensureDownloadedIndexLoaded()
   const resolved = String(targetPath || '')
-  if (!sessionDownloadedPaths.has(resolved) || !existsSync(resolved)) {
+  if (!isAllowedMaterialFile(resolved) || !existsSync(resolved)) {
     throw new Error('找不到该已下载文件，可能已被移动或删除')
   }
   const errorMessage = await shell.openPath(resolved)
@@ -867,7 +1091,7 @@ handleDashboard('myhku-open-downloaded-file', async (_event, targetPath) => {
 handleDashboard('myhku-reveal-downloaded-file', async (_event, targetPath) => {
   ensureDownloadedIndexLoaded()
   const resolved = String(targetPath || '')
-  if (!sessionDownloadedPaths.has(resolved) || !existsSync(resolved)) {
+  if (!isAllowedMaterialFile(resolved) || !existsSync(resolved)) {
     throw new Error('找不到该已下载文件，可能已被移动或删除')
   }
   shell.showItemInFolder(resolved)
