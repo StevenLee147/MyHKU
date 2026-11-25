@@ -341,7 +341,12 @@ export function clearConnections() {
     'myhku-pinned-resources',
     'myhku-seen-resources',
     'myhku-new-resources',
+    'myhku-updated-resources',
+    'myhku-updated-resources-v2',
+    'myhku-resource-meta-v1',
+    'myhku-resource-meta-v2',
     'myhku-downloaded-index',
+    'myhku-download-queue-v1',
     'myhku-gpa-config',
   ]) {
     try { localStorage.removeItem(key) } catch { /* ignore */ }

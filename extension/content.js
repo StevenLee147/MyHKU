@@ -401,13 +401,18 @@
       announcements.push({ id, title, course, ...(published ? { published } : {}), url: href })
     })
 
+    const pageCourseHeading = /^\/course\/(?:view|overview|resources)\.php$/i.test(location.pathname)
+      ? stripCourseSrPrefix(document.querySelector('h1, .page-header-headings')?.textContent)
+      : ''
     const resources = []; const resourceIds = new Set()
-    document.querySelectorAll('a[href*="/mod/resource/"], a[href*="/mod/folder/"], a[href*="/mod/url/"], a[href*="/mod/page/"]').forEach((link) => {
-      const href = linkHref(link); const title = clean(link.textContent) || clean(link.getAttribute('aria-label'))
+    document.querySelectorAll('a[href*="/mod/resource/"], a[href*="/mod/folder/"], a[href*="/mod/url/"], a[href*="/mod/page/"], a[href*="/mod/book/"]').forEach((link) => {
+      const href = linkHref(link)
+      if (href && /\/(?:index|edit)\.php\b/i.test(href)) return
+      const title = visibleLabelFromNode(link) || clean(link.textContent) || clean(link.getAttribute('aria-label'))
       if (!href || !title) return
       const root = nearest(link); const id = idFrom(root, href, 'resource', title)
       if (resourceIds.has(id)) return
-      resourceIds.add(id); resources.push({ id, title, course: attr(root, ['data-course-name']) || text(root, ['.course-name', '.coursename']) || '未提供课程', url: href })
+      resourceIds.add(id); resources.push({ id, title, course: attr(root, ['data-course-name']) || text(root, ['.course-name', '.coursename']) || pageCourseHeading || '未提供课程', url: href })
     })
 
     const grades = []; const gradeIds = new Set()

@@ -16,8 +16,10 @@ export const RESOURCE_KIND_LABELS: Record<ResourceKind, string> = {
 export const PINNED_RESOURCES_KEY = 'myhku-pinned-resources'
 export const SEEN_RESOURCES_KEY = 'myhku-seen-resources'
 export const NEW_RESOURCES_KEY = 'myhku-new-resources'
-export const UPDATED_RESOURCES_KEY = 'myhku-updated-resources'
-export const RESOURCE_META_KEY = 'myhku-resource-meta-v1'
+export const UPDATED_RESOURCES_KEY = 'myhku-updated-resources-v2'
+export const RESOURCE_META_KEY = 'myhku-resource-meta-v2'
+const LEGACY_UPDATED_RESOURCES_KEY = 'myhku-updated-resources'
+const LEGACY_RESOURCE_META_KEY = 'myhku-resource-meta-v1'
 export const DOWNLOADED_INDEX_KEY = 'myhku-downloaded-index'
 export const WEB_STORAGE_PREFS_KEY = 'myhku-storage-prefs'
 
@@ -77,7 +79,7 @@ export function isDirectDownloadableUrl(rawUrl?: string): boolean {
   try {
     const u = new URL(rawUrl)
     return u.protocol === 'https:' && (u.hostname === 'hku.hk' || u.hostname.endsWith('.hku.hk')) &&
-      /\/(?:mod\/(?:resource|folder)\/|pluginfile\.php\/)/.test(u.pathname)
+      /\/(?:mod\/(?:resource|folder)\/|(?:webservice\/)?pluginfile\.php\/|draftfile\.php\/)/.test(u.pathname)
   } catch {
     return false
   }
@@ -260,28 +262,70 @@ function stripLeadingCourseKey(normalized: string, courseCode: string): string {
   return normalized
 }
 
+function extractExplicitFileExt(raw?: string): string {
+  if (!raw) return ''
+  const m = String(raw).trim().match(/\.([a-z0-9]{2,5})(?:$|[?#\s)])/i)
+  if (!m) return ''
+  const ext = m[1].toLowerCase()
+  return ['pdf', 'ppt', 'pptx', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'zip', 'rar', '7z', 'py', 'ipynb', 'txt', 'rtf', 'key'].includes(ext)
+    ? ext
+    : ''
+}
+
+export function canonicalizeResourceUrl(rawUrl?: string): string {
+  if (!rawUrl) return ''
+  try {
+    const u = new URL(rawUrl)
+    u.searchParams.delete('forcedownload')
+    u.searchParams.delete('redirect')
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return String(rawUrl || '').trim()
+  }
+}
+
+function normalizeComparableResourceTitle(raw: string): string {
+  return String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s+(?:File|Folder|URL|Page|Book|文件|文件夹|网页|链接)$/i, '')
+    .trim()
+}
+
 export function matchResourceToLocalFile(
   resource: LiveResource,
   scannedFiles: ScannedCourseFileItem[],
 ): ScannedCourseFileItem | undefined {
   if (!scannedFiles.length) return undefined
+  if (resource.url && /\/mod\/folder\//i.test(resource.url)) return undefined
   const courseFolder = extractCourseCodeFolder(resource.course)
   const courseKey = courseFolder.toLowerCase()
   const titleKey = normalizeMaterialMatchKey(resource.title)
   const strippedTitleKey = stripLeadingCourseKey(titleKey, courseFolder)
   let urlFileKey = ''
+  let expectedExt = extractExplicitFileExt(resource.title)
   if (resource.url) {
     try {
       const u = new URL(resource.url)
-      if (u.pathname.includes('/pluginfile.php/')) {
+      if (u.pathname.includes('/pluginfile.php/') || u.pathname.includes('/draftfile.php/')) {
         const seg = decodeURIComponent(u.pathname.split('/').pop() || '')
         urlFileKey = normalizeMaterialMatchKey(seg)
+        if (!expectedExt) expectedExt = extractExplicitFileExt(seg)
       }
     } catch { /* ignore */ }
   }
-  const inCourse = scannedFiles.filter(f => !f.courseFolder || f.courseFolder.toLowerCase() === courseKey)
-  const pool = inCourse.length ? inCourse : scannedFiles
-  for (const file of pool) {
+  // Strict course isolation: never match a resource in Course B against files inside Course A's folder.
+  const inCourse = scannedFiles.filter(f => {
+    if (!f.courseFolder) return true
+    return f.courseFolder.toLowerCase() === courseKey || extractCourseCodeFolder(f.courseFolder).toLowerCase() === courseKey
+  })
+  if (!inCourse.length) return undefined
+  for (const file of inCourse) {
+    if (expectedExt) {
+      const localExt = extractExplicitFileExt(file.filename)
+      if (localExt && localExt !== expectedExt) continue
+    }
     const fileKey = file.normalizedKey || normalizeMaterialMatchKey(file.filename)
     if (!fileKey) continue
     const strippedFileKey = stripLeadingCourseKey(fileKey, courseFolder)
@@ -295,7 +339,18 @@ export function matchResourceToLocalFile(
   return undefined
 }
 
+let purgedLegacyFalsePositives = false
+function purgeLegacyMaterialsKeysOnce(): void {
+  if (purgedLegacyFalsePositives || typeof localStorage === 'undefined') return
+  purgedLegacyFalsePositives = true
+  try {
+    localStorage.removeItem(LEGACY_UPDATED_RESOURCES_KEY)
+    localStorage.removeItem(LEGACY_RESOURCE_META_KEY)
+  } catch { /* ignore */ }
+}
+
 function readResourceMetaMap(): Record<string, StoredResourceMeta> {
+  purgeLegacyMaterialsKeysOnce()
   try {
     const raw = JSON.parse(localStorage.getItem(RESOURCE_META_KEY) || '{}')
     return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, StoredResourceMeta>) : {}
@@ -311,6 +366,7 @@ function writeResourceMetaMap(map: Record<string, StoredResourceMeta>): void {
 }
 
 export function getUpdatedResourcesMap(): Record<string, MaterialUpdateRecord> {
+  purgeLegacyMaterialsKeysOnce()
   try {
     const raw = JSON.parse(localStorage.getItem(UPDATED_RESOURCES_KEY) || '{}')
     return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, MaterialUpdateRecord>) : {}
@@ -341,7 +397,7 @@ export function evaluateResourceSnapshotDiff(resources: LiveResource[]): {
     for (const r of resources) {
       if (!r.id) continue
       ids.push(r.id)
-      metaMap[r.id] = { title: r.title, url: r.url, course: r.course, seenAt: nowIso }
+      metaMap[r.id] = { title: r.title, url: canonicalizeResourceUrl(r.url) || r.url, course: r.course, seenAt: nowIso }
     }
     writeStringSet(SEEN_RESOURCES_KEY, ids)
     writeStringSet(NEW_RESOURCES_KEY, [])
@@ -352,14 +408,19 @@ export function evaluateResourceSnapshotDiff(resources: LiveResource[]): {
   const newSet = readStringSet(NEW_RESOURCES_KEY)
   for (const r of resources) {
     if (!r.id) continue
+    const normUrl = canonicalizeResourceUrl(r.url) || r.url
     const prev = metaMap[r.id]
     if (!seen.has(r.id)) {
       seen.add(r.id)
       newSet.add(r.id)
-      metaMap[r.id] = { title: r.title, url: r.url, course: r.course, seenAt: nowIso }
+      metaMap[r.id] = { title: r.title, url: normUrl, course: r.course, seenAt: nowIso }
     } else if (prev) {
-      const titleChanged = prev.title && prev.title !== r.title
-      const urlChanged = Boolean(prev.url && r.url && prev.url !== r.url)
+      const prevTitleComp = normalizeComparableResourceTitle(prev.title)
+      const nextTitleComp = normalizeComparableResourceTitle(r.title)
+      const titleChanged = Boolean(prevTitleComp && nextTitleComp && prevTitleComp !== nextTitleComp)
+      const prevUrlComp = canonicalizeResourceUrl(prev.url)
+      const nextUrlComp = canonicalizeResourceUrl(r.url)
+      const urlChanged = Boolean(prevUrlComp && nextUrlComp && prevUrlComp !== nextUrlComp)
       if (titleChanged || urlChanged) {
         updatedMap[r.id] = {
           id: r.id,
@@ -369,9 +430,9 @@ export function evaluateResourceSnapshotDiff(resources: LiveResource[]): {
         }
         newSet.delete(r.id)
       }
-      metaMap[r.id] = { ...prev, title: r.title, url: r.url, course: r.course }
+      metaMap[r.id] = { ...prev, title: r.title, url: normUrl, course: r.course }
     } else {
-      metaMap[r.id] = { title: r.title, url: r.url, course: r.course, seenAt: nowIso }
+      metaMap[r.id] = { title: r.title, url: normUrl, course: r.course, seenAt: nowIso }
     }
   }
   writeStringSet(SEEN_RESOURCES_KEY, seen)
@@ -386,22 +447,34 @@ export function mergeRemoteUpdateProbes(
 ): Record<string, MaterialUpdateRecord> {
   const metaMap = readResourceMetaMap()
   const updatedMap = getUpdatedResourcesMap()
+  const nowIso = new Date().toISOString()
   for (const [id, probe] of Object.entries(probes)) {
-    if (!probe || !probe.signature) continue
+    if (!probe) continue
     const prev = metaMap[id]
-    const signatureDiffers =
-      Boolean(prev?.downloadedSignature && prev.downloadedSignature !== probe.signature) ||
-      Boolean(prev?.remoteSignature && prev.remoteSignature !== probe.signature)
-    if (probe.hasRemoteUpdate || signatureDiffers) {
+    if (probe.hasRemoteUpdate) {
       updatedMap[id] = {
         id,
         reason: probe.reason || 'Moodle 远端文件版本已更新',
-        detectedAt: probe.checkedAt || new Date().toISOString(),
-        remoteSignature: probe.signature,
+        detectedAt: probe.checkedAt || nowIso,
+        ...(probe.signature ? { remoteSignature: probe.signature } : {}),
       }
-    }
-    if (prev) {
-      metaMap[id] = { ...prev, remoteSignature: probe.signature }
+      if (probe.signature) {
+        metaMap[id] = {
+          ...(prev || { title: '', course: '', seenAt: nowIso }),
+          remoteSignature: probe.signature,
+        }
+      }
+    } else {
+      if (updatedMap[id]?.remoteSignature || (updatedMap[id] && !updatedMap[id].previousTitle)) {
+        delete updatedMap[id]
+      }
+      if (probe.signature) {
+        metaMap[id] = {
+          ...(prev || { title: '', course: '', seenAt: nowIso }),
+          remoteSignature: probe.signature,
+          downloadedSignature: probe.signature,
+        }
+      }
     }
   }
   writeResourceMetaMap(metaMap)
@@ -421,10 +494,13 @@ export function markResourceSynced(id: string, signature?: string): {
   }
   if (signature) {
     const metaMap = readResourceMetaMap()
-    if (metaMap[id]) {
-      metaMap[id] = { ...metaMap[id], remoteSignature: signature, downloadedSignature: signature }
-      writeResourceMetaMap(metaMap)
+    const prev = metaMap[id]
+    metaMap[id] = {
+      ...(prev || { title: '', course: '', seenAt: new Date().toISOString() }),
+      remoteSignature: signature,
+      downloadedSignature: signature,
     }
+    writeResourceMetaMap(metaMap)
   }
   return { newIds, updatedMap }
 }
@@ -461,6 +537,8 @@ export function clearMaterialsState(): void {
     NEW_RESOURCES_KEY,
     UPDATED_RESOURCES_KEY,
     RESOURCE_META_KEY,
+    LEGACY_UPDATED_RESOURCES_KEY,
+    LEGACY_RESOURCE_META_KEY,
     DOWNLOADED_INDEX_KEY,
   ]) {
     try {

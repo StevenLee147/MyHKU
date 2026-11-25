@@ -1,6 +1,6 @@
 import type { LiveAssignment, LiveSnapshot } from './hku'
 
-export type NavTarget = 'overview' | 'calendar' | 'moodle' | 'materials' | 'settings'
+export type NavTarget = 'overview' | 'calendar' | 'moodle' | 'materials' | 'downloads' | 'settings'
 
 export type AppNotificationItem = {
   id: string

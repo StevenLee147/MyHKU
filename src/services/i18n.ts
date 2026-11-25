@@ -50,12 +50,13 @@ export function localizedGreeting(locale: Locale, now = new Date()): string {
   return '晚上好'
 }
 
-export const NAV_LABELS: Record<Locale, Record<'overview' | 'calendar' | 'moodle' | 'materials' | 'settings', string>> = {
+export const NAV_LABELS: Record<Locale, Record<'overview' | 'calendar' | 'moodle' | 'materials' | 'downloads' | 'settings', string>> = {
   zh: {
     overview: '概览',
     calendar: '我的课表',
     moodle: 'Moodle',
     materials: '课程资料',
+    downloads: '下载队列',
     settings: '设置',
   },
   en: {
@@ -63,6 +64,7 @@ export const NAV_LABELS: Record<Locale, Record<'overview' | 'calendar' | 'moodle
     calendar: 'Timetable',
     moodle: 'Moodle & GPA',
     materials: 'Materials',
+    downloads: 'Downloads',
     settings: 'Settings',
   },
 }

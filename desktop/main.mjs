@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, session, shell, Tray, webFrameMain } from 'electron'
-import { fileLinksFromHtml, probeMoodleResource, resolveMoodleDownloads, saveMoodleDownload, scanStorageDirectory } from './downloads.mjs'
+import { computeFileSha1, evaluateRemoteResourceUpdate, fileLinksFromHtml, probeMoodleResource, resolveMoodleDownloads, saveMoodleDownload, scanStorageDirectory } from './downloads.mjs'
 import { AuthCoordinator, AUTH_TIMING, SERVICE_URLS, inspectAuthPage, serviceForUrl } from './auth-flow.mjs'
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -947,8 +947,39 @@ function isAllowedMaterialFile(targetPath) {
   return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel)
 }
 
-async function performMoodleDownload(rawRequest) {
+const activeDownloadControllers = new Map()
+
+function canonicalMaterialUrlKey(rawUrl) {
+  try {
+    const u = new URL(rawUrl)
+    u.searchParams.delete('forcedownload')
+    u.searchParams.delete('redirect')
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return String(rawUrl || '')
+  }
+}
+
+function emitDownloadProgress(payload) {
+  if (!dashboard || dashboard.isDestroyed()) return
+  try { dashboard.webContents.send('myhku-download-progress', payload) } catch { /* dashboard closing */ }
+}
+
+async function waitForMoodleSessionReady(timeoutMs = 12_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const rec = auth.records.get('moodle')
+    if (rec?.state === 'connected') return true
+    if (rec?.state === 'needs_2fa' || rec?.state === 'manual_required' || rec?.state === 'error') return false
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  return auth.records.get('moodle')?.state === 'connected'
+}
+
+async function performMoodleDownloadOnce(rawRequest, controller) {
   const isObjectReq = Boolean(rawRequest && typeof rawRequest === 'object')
+  const taskId = isObjectReq && typeof rawRequest.taskId === 'string' ? rawRequest.taskId : ''
   const url = String(isObjectReq ? rawRequest.url : rawRequest || '')
   const cfg = getStorageConfigState()
   const legacyFlatCall = !isObjectReq && !cfg.isCustom
@@ -964,49 +995,177 @@ async function performMoodleDownload(rawRequest) {
     : undefined
 
   const authenticated = session.fromPartition('persist:myhku-hku')
-  const parser = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
+  let parser = null
+  const getParseHtml = async (html, base) => {
+    if (!parser || parser.isDestroyed()) {
+      parser = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
+      await parser.loadURL('about:blank')
+    }
+    return parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`)
+  }
+  const makeSignal = (ms) => controller ? AbortSignal.any([controller.signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms)
   try {
-    await parser.loadURL('about:blank')
-    const fetchPage = value => authenticated.fetch(value, { redirect: 'manual', signal: AbortSignal.timeout(120_000) })
-    const urls = await resolveMoodleDownloads(url, fetchPage,
-      (html, base) => parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`))
+    if (taskId) {
+      emitDownloadProgress({ taskId, url, phase: 'resolving', fileIndex: 0, fileCount: 0, transferredBytes: 0, targetDir: directory })
+    }
+    const fetchPage = value => authenticated.fetch(value, { redirect: 'manual', signal: makeSignal(120_000) })
+    const urls = await resolveMoodleDownloads(url, fetchPage, getParseHtml)
     ensureDownloadedIndexLoaded()
     const paths = []
     const files = []
+    let lastFailure = null
+    let completedBytes = 0
+    let lastEmitAt = 0
     for (let idx = 0; idx < urls.length; idx++) {
-      const detail = await saveMoodleDownload(urls[idx], directory, fetchPage, {
-        course: isObjectReq ? rawRequest.course : '',
-        title: isObjectReq ? rawRequest.title : '',
-        organizeMode,
-        replaceExisting,
-        targetFilePath: idx === 0 ? safeTargetFile : undefined,
-        returnDetailed: true,
-      })
-      sessionDownloadedPaths.add(detail.path)
-      sessionDownloadedPaths.add(resolvePath(detail.path))
-      paths.push(detail.path)
-      files.push(detail)
+      if (controller?.signal.aborted) {
+        const abortErr = new Error('已取消下载')
+        abortErr.code = 'ABORT_ERR'
+        throw abortErr
+      }
+      try {
+        const detail = await saveMoodleDownload(urls[idx], directory, fetchPage, {
+          course: isObjectReq ? rawRequest.course : '',
+          title: isObjectReq ? rawRequest.title : '',
+          organizeMode,
+          replaceExisting,
+          targetFilePath: urls.length === 1 && idx === 0 ? safeTargetFile : undefined,
+          returnDetailed: true,
+          signal: controller?.signal,
+          onProgress: info => {
+            if (!taskId) return
+            const now = Date.now()
+            if (info.writtenBytes > 0 && now - lastEmitAt < 100 && (!info.totalBytes || info.writtenBytes < info.totalBytes)) return
+            lastEmitAt = now
+            emitDownloadProgress({
+              taskId,
+              url,
+              phase: 'downloading',
+              fileIndex: idx + 1,
+              fileCount: urls.length,
+              currentFilename: info.filename,
+              transferredBytes: completedBytes + info.writtenBytes,
+              totalBytes: urls.length === 1 ? info.totalBytes : undefined,
+              targetDir: info.targetDir || directory,
+            })
+          },
+        })
+        completedBytes += detail.size || 0
+        sessionDownloadedPaths.add(detail.path)
+        sessionDownloadedPaths.add(resolvePath(detail.path))
+        paths.push(detail.path)
+        files.push(detail)
+      } catch (fileErr) {
+        if (controller?.signal.aborted || fileErr?.name === 'AbortError' || fileErr?.code === 'ABORT_ERR') {
+          const abortErr = new Error('已取消下载')
+          abortErr.code = 'ABORT_ERR'
+          throw abortErr
+        }
+        lastFailure = fileErr
+        if (urls.length === 1) throw fileErr
+      }
     }
+    if (!paths.length && lastFailure) throw lastFailure
     const signature = files.map(f => f.signature || '').join(';;')
     if (paths.length) {
+      const canonicalKey = canonicalMaterialUrlKey(url)
       downloadedIndexByUrl.set(url, paths)
+      if (canonicalKey && canonicalKey !== url) downloadedIndexByUrl.set(canonicalKey, paths)
       const first = files[0] || {}
-      downloadedMetaByUrl.set(url, {
+      const metaRecord = {
         paths,
         signature,
+        files: files.map(f => ({
+          path: f.path,
+          filename: f.filename,
+          canonicalUrl: f.canonicalUrl,
+          ...(f.etag ? { etag: f.etag } : {}),
+          ...(f.cleanEtag ? { cleanEtag: f.cleanEtag } : {}),
+          ...(f.lastModified ? { lastModified: f.lastModified } : {}),
+          ...(f.size !== undefined ? { size: f.size } : {}),
+          ...(f.sha1 ? { sha1: f.sha1 } : {}),
+          ...(f.sha256 ? { sha256: f.sha256 } : {}),
+          ...(f.revision !== undefined ? { revision: f.revision } : {}),
+        })),
         ...(first.etag ? { etag: first.etag } : {}),
         ...(first.lastModified ? { lastModified: first.lastModified } : {}),
-        ...(first.contentLength ? { contentLength: first.contentLength } : {}),
+        ...(first.size !== undefined ? { contentLength: first.size } : {}),
         ...(first.sha256 ? { sha256: first.sha256 } : {}),
         ...(first.revision !== undefined ? { revision: first.revision } : {}),
         ...(first.filename ? { filename: first.filename } : {}),
         updatedAt: new Date().toISOString(),
-      })
+      }
+      downloadedMetaByUrl.set(url, metaRecord)
+      if (canonicalKey && canonicalKey !== url) downloadedMetaByUrl.set(canonicalKey, metaRecord)
       persistDownloadedIndex()
     }
-    return { count: paths.length, paths, directory, signature, files: files.map(f => ({ path: f.path, filename: f.filename, courseFolder: f.courseFolder, categoryFolder: f.categoryFolder, size: f.size })) }
-  } finally { parser.destroy() }
+    if (taskId) {
+      emitDownloadProgress({
+        taskId,
+        url,
+        phase: 'completed',
+        fileIndex: files.length,
+        fileCount: urls.length,
+        transferredBytes: completedBytes,
+        totalBytes: completedBytes,
+        targetDir: directory,
+      })
+    }
+    return {
+      count: paths.length,
+      paths,
+      directory,
+      signature,
+      totalBytes: completedBytes,
+      files: files.map(f => ({ path: f.path, filename: f.filename, courseFolder: f.courseFolder, categoryFolder: f.categoryFolder, size: f.size })),
+    }
+  } finally {
+    if (parser && !parser.isDestroyed()) parser.destroy()
+  }
 }
+
+async function performMoodleDownload(rawRequest) {
+  const isObjectReq = Boolean(rawRequest && typeof rawRequest === 'object')
+  const taskId = isObjectReq && typeof rawRequest.taskId === 'string' && rawRequest.taskId ? rawRequest.taskId : ''
+  const url = String(isObjectReq ? rawRequest.url : rawRequest || '')
+  const controller = new AbortController()
+  if (taskId) activeDownloadControllers.set(taskId, controller)
+  try {
+    try {
+      return await performMoodleDownloadOnce(rawRequest, controller)
+    } catch (error) {
+      if (!controller.signal.aborted && error instanceof Error && /会话已过期/.test(error.message) && readAccount()) {
+        auth.request('moodle', { refresh: true })
+        const reconnected = await waitForMoodleSessionReady(12_000)
+        if (reconnected && !controller.signal.aborted) {
+          return await performMoodleDownloadOnce(rawRequest, controller)
+        }
+      }
+      throw error
+    }
+  } catch (error) {
+    if (taskId) {
+      const isCancelled = controller.signal.aborted || error?.code === 'ABORT_ERR' || error?.name === 'AbortError'
+      emitDownloadProgress({
+        taskId,
+        url,
+        phase: isCancelled ? 'cancelled' : 'error',
+        error: error instanceof Error ? error.message : '下载失败',
+      })
+    }
+    throw error
+  } finally {
+    if (taskId) activeDownloadControllers.delete(taskId)
+  }
+}
+
+handleDashboard('myhku-cancel-download', (_event, taskId) => {
+  const key = String(taskId || '')
+  const ctrl = activeDownloadControllers.get(key)
+  if (!ctrl) return false
+  ctrl.abort()
+  activeDownloadControllers.delete(key)
+  return true
+})
 
 handleDashboard('myhku-download-resource', async (_event, url) => {
   const result = await performMoodleDownload(String(url || ''))
@@ -1095,44 +1254,79 @@ handleDashboard('myhku-scan-storage-dir', async () => {
 
 handleDashboard('myhku-check-resource-updates', async (_event, rawItems) => {
   ensureDownloadedIndexLoaded()
-  const items = Array.isArray(rawItems) ? rawItems.filter(i => i && typeof i.url === 'string' && i.url).slice(0, 60) : []
+  const items = Array.isArray(rawItems) ? rawItems.filter(i => i && typeof i.url === 'string' && i.url).slice(0, 250) : []
   if (!items.length) return {}
+  const probeTargets = items.filter(entry => {
+    const canonical = canonicalMaterialUrlKey(entry.url)
+    const savedMeta = downloadedMetaByUrl.get(entry.url) || downloadedMetaByUrl.get(canonical)
+    const indexedPaths = downloadedIndexByUrl.get(entry.url) || downloadedIndexByUrl.get(canonical)
+    const hasValidSavedPath = (Array.isArray(savedMeta?.paths) && savedMeta.paths.some(p => existsSync(p))) ||
+      (Array.isArray(indexedPaths) && indexedPaths.some(p => existsSync(p)))
+    const hasDiskMatch = Boolean(entry.hasLocalCopy || typeof entry.localSize === 'number' || typeof entry.localMtimeMs === 'number')
+    return hasValidSavedPath || hasDiskMatch
+  })
+  if (!probeTargets.length) return {}
+
   const authenticated = session.fromPartition('persist:myhku-hku')
-  const parser = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
+  let parser = null
+  const parseHtml = async (html, base) => {
+    if (!parser || parser.isDestroyed()) {
+      parser = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } })
+      await parser.loadURL('about:blank')
+    }
+    return parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`)
+  }
   const out = {}
+  let dirtyMeta = false
   try {
-    await parser.loadURL('about:blank')
     const fetchPage = value => authenticated.fetch(value, { redirect: 'manual', signal: AbortSignal.timeout(20_000) })
-    const parseHtml = (html, base) => parser.webContents.executeJavaScript(`(${fileLinksFromHtml.toString()})(${JSON.stringify(html)}, ${JSON.stringify(base)})`)
-    const queue = [...items]
-    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+    const queue = [...probeTargets]
+    const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
       while (queue.length) {
+        while (activeDownloadControllers.size > 0) {
+          await new Promise(resolve => setTimeout(resolve, 250))
+        }
         const entry = queue.shift()
         if (!entry) break
         try {
+          const canonical = canonicalMaterialUrlKey(entry.url)
+          const savedMeta = downloadedMetaByUrl.get(entry.url) || downloadedMetaByUrl.get(canonical)
           const probe = await probeMoodleResource(entry.url, fetchPage, parseHtml)
           const first = probe.files[0] || {}
-          const savedMeta = downloadedMetaByUrl.get(entry.url)
-          let hasRemoteUpdate = false
-          let reason = ''
-          if (savedMeta?.signature && probe.signature && savedMeta.signature !== probe.signature) {
-            hasRemoteUpdate = true
-            if (first.revision !== undefined && savedMeta.revision !== undefined && first.revision !== savedMeta.revision) {
-              reason = `Moodle 远端文件已升级至第 ${first.revision} 版`
-            } else {
-              reason = 'Moodle 远端文件版本或内容已更新'
+          let localSha1
+          if (!savedMeta && probe.files.length === 1 && entry.localPath && isAllowedMaterialFile(entry.localPath) && existsSync(entry.localPath)) {
+            if (first.cleanEtag && /^[0-9a-f]{40}$/i.test(first.cleanEtag)) {
+              localSha1 = await computeFileSha1(resolvePath(entry.localPath))
             }
-          } else if (!savedMeta?.signature && probe.files.length === 1 && (typeof entry.localSize === 'number' || typeof entry.localMtimeMs === 'number')) {
-            if (typeof first.contentLength === 'number' && typeof entry.localSize === 'number' && first.contentLength !== entry.localSize) {
-              hasRemoteUpdate = true
-              reason = '远端文件大小与本地文件不一致，存在更新版本'
-            } else if (first.lastModified && typeof entry.localMtimeMs === 'number') {
-              const remoteMs = Date.parse(first.lastModified)
-              if (Number.isFinite(remoteMs) && remoteMs > entry.localMtimeMs + 120_000) {
-                hasRemoteUpdate = true
-                reason = 'Moodle 远端最后修改时间晚于本地文件'
-              }
+          }
+          const verdict = evaluateRemoteResourceUpdate({
+            probe,
+            savedMeta,
+            localFile: (typeof entry.localSize === 'number' || typeof entry.localMtimeMs === 'number' || localSha1)
+              ? { path: entry.localPath, size: entry.localSize, mtimeMs: entry.localMtimeMs, sha1: localSha1 }
+              : undefined,
+          })
+          if (verdict.verifiedIdentical && entry.localPath && isAllowedMaterialFile(entry.localPath)) {
+            const resolvedLocal = resolvePath(entry.localPath)
+            const backfilled = {
+              paths: [resolvedLocal],
+              signature: probe.signature,
+              files: [{
+                path: resolvedLocal,
+                filename: first.filename,
+                canonicalUrl: first.canonicalUrl,
+                ...(first.etag ? { etag: first.etag } : {}),
+                ...(first.cleanEtag ? { cleanEtag: first.cleanEtag } : {}),
+                ...(first.lastModified ? { lastModified: first.lastModified } : {}),
+                ...(typeof entry.localSize === 'number' ? { size: entry.localSize } : {}),
+                ...(localSha1 ? { sha1: localSha1 } : {}),
+                ...(first.revision !== undefined ? { revision: first.revision } : {}),
+              }],
+              updatedAt: probe.checkedAt,
             }
+            downloadedMetaByUrl.set(entry.url, backfilled)
+            if (canonical && canonical !== entry.url) downloadedMetaByUrl.set(canonical, backfilled)
+            dirtyMeta = true
           }
           out[entry.id || entry.url] = {
             signature: probe.signature,
@@ -1140,8 +1334,8 @@ handleDashboard('myhku-check-resource-updates', async (_event, rawItems) => {
             ...(first.revision !== undefined ? { revision: first.revision } : {}),
             ...(first.lastModified ? { lastModified: first.lastModified } : {}),
             ...(first.contentLength !== undefined ? { contentLength: first.contentLength } : {}),
-            hasRemoteUpdate,
-            ...(reason ? { reason } : {}),
+            hasRemoteUpdate: Boolean(verdict.hasRemoteUpdate),
+            ...(verdict.reason ? { reason: verdict.reason } : {}),
             checkedAt: probe.checkedAt,
           }
         } catch {
@@ -1150,8 +1344,11 @@ handleDashboard('myhku-check-resource-updates', async (_event, rawItems) => {
       }
     })
     await Promise.all(workers)
+    if (dirtyMeta) persistDownloadedIndex()
     return out
-  } finally { parser.destroy() }
+  } finally {
+    if (parser && !parser.isDestroyed()) parser.destroy()
+  }
 })
 
 handleDashboard('myhku-open-downloaded-file', async (_event, targetPath) => {

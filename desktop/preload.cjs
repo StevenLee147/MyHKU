@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
     'myhku-download-resource-detailed',
     request && typeof request === 'object'
       ? {
+          taskId: typeof request.taskId === 'string' ? request.taskId.slice(0, 120) : '',
           url: String(request.url || ''),
           course: typeof request.course === 'string' ? request.course : '',
           title: typeof request.title === 'string' ? request.title : '',
@@ -21,6 +22,13 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
         }
       : String(request || ''),
   ),
+  cancelDownload: (taskId) => ipcRenderer.invoke('myhku-cancel-download', String(taskId || '').slice(0, 120)),
+  onDownloadProgress: (listener) => {
+    if (typeof listener !== 'function') return () => {}
+    const handler = (_event, payload) => listener(payload)
+    ipcRenderer.on('myhku-download-progress', handler)
+    return () => ipcRenderer.removeListener('myhku-download-progress', handler)
+  },
   getDownloadedIndex: () => ipcRenderer.invoke('myhku-get-downloaded-index'),
   getStorageConfig: () => ipcRenderer.invoke('myhku-get-storage-config'),
   setStorageConfig: (config) => ipcRenderer.invoke('myhku-set-storage-config', {
@@ -36,9 +44,11 @@ contextBridge.exposeInMainWorld('myhkuDesktop', {
   checkResourceUpdates: (items) => ipcRenderer.invoke(
     'myhku-check-resource-updates',
     Array.isArray(items)
-      ? items.slice(0, 60).map(item => ({
+      ? items.slice(0, 250).map(item => ({
           id: String(item?.id || ''),
           url: String(item?.url || ''),
+          hasLocalCopy: Boolean(item?.hasLocalCopy),
+          localPath: typeof item?.localPath === 'string' ? item.localPath.slice(0, 1024) : undefined,
           localSize: typeof item?.localSize === 'number' ? item.localSize : undefined,
           localMtimeMs: typeof item?.localMtimeMs === 'number' ? item.localMtimeMs : undefined,
         }))

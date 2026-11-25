@@ -310,14 +310,412 @@
   }
 }
 
+/* Download Queue Page, Toolbar & Native Progress Bar */
+.materials-queue-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 22px 12px;
+  padding: 9px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  font-size: 12px;
+  color: var(--text-heading);
+}
+
+.materials-queue-strip.has-error {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.dl-queue-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 0 22px 14px;
+}
+
+.dl-metric-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-subtle);
+}
+
+.dl-metric-card small {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.dl-metric-card strong {
+  font-size: 15px;
+  color: var(--text-heading);
+}
+
+.dl-metric-icon {
+  flex-shrink: 0;
+  color: var(--accent-text);
+}
+
+.dl-metric-icon.done {
+  color: #16a34a;
+}
+
+.dl-metric-icon.warn {
+  color: var(--warning);
+}
+
+.dl-toolbar-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 22px 12px;
+}
+
+.dl-queue-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-subtle);
+}
+
+.dl-toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dl-toolbar-sep {
+  inline-size: 0;
+  block-size: 18px;
+  border-inline-start: 1px solid var(--border-color);
+}
+
+.dl-toolbar-btn {
+  min-inline-size: 28px;
+  min-block-size: 28px;
+}
+
+.dl-toolbar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dl-toolbar-btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+
+.dl-toolbar-btn[aria-disabled="true"] {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.dl-filter-tabs {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.dl-queue-list {
+  display: grid;
+  gap: 9px;
+  padding: 0 22px 20px;
+}
+
+.dl-queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-surface);
+}
+
+.dl-queue-item.status-downloading {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 35%, var(--bg-surface));
+}
+
+.dl-queue-item.status-failed {
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning-soft) 35%, var(--bg-surface));
+}
+
+.dl-item-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.dl-item-file-icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: var(--accent-text);
+}
+
+.dl-item-body {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+}
+
+.dl-item-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dl-item-title-row strong {
+  font-size: 13px;
+  color: var(--text-heading);
+  word-break: break-word;
+}
+
+.dl-item-course {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.dl-item-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.dl-item-error {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.dl-status-badge {
+  display: inline-block;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+}
+
+.dl-status-badge.downloading {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.dl-status-badge.queued {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+.dl-status-badge.completed {
+  background: rgb(22 163 74 / 0.12);
+  color: #15803d;
+  border-color: rgb(22 163 74 / 0.35);
+}
+
+.dl-status-badge.failed {
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.dl-status-badge.cancelled {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.dl-progress-block {
+  display: grid;
+  gap: 4px;
+  margin-top: 3px;
+  max-width: 520px;
+}
+
+.dl-progress-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+progress.dl-progress {
+  appearance: none;
+  border: 0 solid;
+  overflow: clip;
+  inline-size: 100%;
+  block-size: 7px;
+  container-type: inline-size;
+  --progress-bar-radius: 999px;
+  --progress-bar-indeterminate-size: 32%;
+  --progress-bar-indeterminate-animation-duration: 1.4s;
+  border-radius: var(--progress-bar-radius);
+  background: var(--bg-subtle);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  progress.dl-progress {
+    --progress-bar-indeterminate-animation-duration: 10s;
+  }
+}
+
+progress.dl-progress:dir(rtl) {
+  --progress-bar-indeterminate-animation: myhku-dl-progress-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear reverse;
+}
+
+progress.dl-progress:indeterminate {
+  --progress-bar-animation: var(
+    --progress-bar-indeterminate-animation,
+    myhku-dl-progress-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear
+  );
+}
+
+progress.dl-progress::-webkit-progress-bar {
+  background: transparent;
+}
+
+progress.dl-progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--progress-bar-radius);
+  animation: var(--progress-bar-animation, revert-rule);
+}
+
+progress.dl-progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--progress-bar-radius);
+  animation: var(--progress-bar-animation, revert-rule);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  progress.dl-progress::-webkit-progress-value {
+    transition: inline-size 0.25s;
+  }
+  progress.dl-progress::-moz-progress-bar {
+    transition: inline-size 0.25s;
+  }
+}
+
+@keyframes myhku-dl-progress-indeterminate {
+  from,
+  to {
+    inline-size: var(--progress-bar-indeterminate-size);
+    margin-right: auto;
+  }
+  from {
+    translate: -100%;
+  }
+  to {
+    translate: 100cqi;
+  }
+}
+
+.dl-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.dl-ext-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.dl-empty-box {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 36px 20px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  color: var(--text-secondary);
+}
+
+.dl-empty-box strong {
+  font-size: 14px;
+  color: var(--text-heading);
+}
+
+.dl-empty-box p {
+  max-width: 480px;
+  font-size: 12px;
+  margin: 0;
+}
+
+.nav-badge-pill {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  font-style: normal;
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.nav-badge-pill.warn {
+  background: var(--warning);
+}
+
+@media (pointer: coarse) {
+  .dl-toolbar-btn {
+    min-inline-size: 40px;
+    min-block-size: 40px;
+  }
+}
+
+@media (forced-colors: active) {
+  .dl-toolbar-btn[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    color: ButtonText;
+  }
+}
+
 @media (max-width: 640px) {
   .materials-storage-bar,
-  .materials-sync-alert {
+  .materials-sync-alert,
+  .materials-queue-strip,
+  .dl-queue-metrics,
+  .dl-toolbar-wrap {
     margin-left: 16px;
     margin-right: 16px;
   }
-  .storage-settings-body {
+  .storage-settings-body,
+  .dl-queue-list {
     padding-left: 16px;
     padding-right: 16px;
+  }
+  .dl-queue-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .dl-item-actions {
+    justify-content: flex-end;
   }
 }

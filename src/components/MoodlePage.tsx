@@ -21,8 +21,10 @@ import {
   X,
 } from 'lucide-react'
 import { CATEGORY_LABELS, mergeWithCustomTasks, type CustomTask, type UnifiedAssignment } from '../services/customTasks'
-import { safeHkuUrl, type LiveSnapshot } from '../services/hku'
+import { enqueueDownloadTask } from '../services/downloadQueue'
+import { safeHkuUrl, type DataMode, type LiveResource, type LiveSnapshot } from '../services/hku'
 import { tr, type Locale } from '../services/i18n'
+import { getWebFallbackStoragePrefs, isDirectDownloadableUrl } from '../services/materials'
 import {
   defaultMoodleCoursePrefs,
   enrichMoodleCourses,
@@ -54,9 +56,12 @@ export function MoodlePage({
   onOpenCourseSelector,
   customTasks = [],
   query,
+  dataMode = 'live',
   selectedCourseId,
   onSelectCourse,
   onOpenMaterials,
+  onOpenDownloads,
+  onNotice,
   onRefresh,
   onOpenAddTask,
   onToggleCustomTask,
@@ -66,6 +71,7 @@ export function MoodlePage({
   locale?: Locale
   snapshot: LiveSnapshot
   rawSnapshot?: LiveSnapshot
+  dataMode?: DataMode
   coursePrefs?: MoodleCoursePrefs
   onChangeCoursePrefs?: (next: MoodleCoursePrefs) => void
   onOpenCourseSelector?: () => void
@@ -74,12 +80,33 @@ export function MoodlePage({
   selectedCourseId: string | null
   onSelectCourse: (courseId: string | null) => void
   onOpenMaterials: () => void
+  onOpenDownloads?: () => void
+  onNotice?: (message: string) => void
   onRefresh: () => void
   onOpenAddTask?: (defaultCourse?: string) => void
   onToggleCustomTask?: (id: string) => void
   onEditCustomTask?: (task: CustomTask) => void
   onDeleteCustomTask?: (id: string) => void
 }) {
+  const handleQuickDownloadResource = (item: LiveResource) => {
+    const safe = safeHkuUrl(item.url)
+    if (!safe || !isDirectDownloadableUrl(safe)) {
+      onOpenMaterials()
+      return
+    }
+    const { deduplicated } = enqueueDownloadTask({
+      resource: item,
+      url: safe,
+      organizeMode: getWebFallbackStoragePrefs().organizeMode,
+      dataMode,
+    })
+    onNotice?.(
+      deduplicated
+        ? tr(locale, `「${item.title}」已在下载队列中`, `${item.title} is already in the download queue`)
+        : tr(locale, `已加入下载队列：${item.title}`, `Added to download queue: ${item.title}`),
+    )
+    if (onOpenDownloads && deduplicated) onOpenDownloads()
+  }
   const [showGpa, setShowGpa] = useState(true)
   const [localQuery, setLocalQuery] = useState('')
   const [scope, setScope] = useState<MoodleSearchScope>('all')
@@ -367,9 +394,15 @@ export function MoodlePage({
                       <strong>{item.title}</strong>
                     </span>
                     {safe && (
-                      <button type="button" className="mini-action-btn" onClick={onOpenMaterials}>
-                        <Download size={12} /> {tr(locale, '管理下载', 'Downloads')}
-                      </button>
+                      isDirectDownloadableUrl(safe) ? (
+                        <button type="button" className="mini-action-btn" onClick={() => handleQuickDownloadResource(item)}>
+                          <Download size={12} /> {tr(locale, '下载', 'Download')}
+                        </button>
+                      ) : (
+                        <a href={safe} target="_blank" rel="noreferrer" className="mini-action-btn dl-ext-link">
+                          <ExternalLink size={12} /> {tr(locale, '查看', 'Open')}
+                        </a>
+                      )
                     )}
                   </div>
                 )
@@ -626,13 +659,24 @@ export function MoodlePage({
             <button type="button" className="text-btn" onClick={onOpenMaterials}>{tr(locale, '打开资料下载中心 →', 'Open Materials Center →')}</button>
           </div>
           {filtered.resources.length ? (
-            filtered.resources.slice(0, 24).map(item => (
-              <div className="live-row" key={item.id}>
-                <FileText size={15} />
-                <span><strong>{item.title}</strong><small>{item.course}</small></span>
-                <button type="button" className="mini-action-btn" onClick={onOpenMaterials}><Download size={12} /> {tr(locale, '前往下载', 'Download')}</button>
-              </div>
-            ))
+            filtered.resources.slice(0, 24).map(item => {
+              const safe = safeHkuUrl(item.url)
+              return (
+                <div className="live-row" key={item.id}>
+                  <FileText size={15} />
+                  <span><strong>{item.title}</strong><small>{item.course}</small></span>
+                  {safe && isDirectDownloadableUrl(safe) ? (
+                    <button type="button" className="mini-action-btn" onClick={() => handleQuickDownloadResource(item)}>
+                      <Download size={12} /> {tr(locale, '加入下载', 'Download')}
+                    </button>
+                  ) : (
+                    <button type="button" className="mini-action-btn" onClick={onOpenMaterials}>
+                      <Download size={12} /> {tr(locale, '前往资料页', 'Materials')}
+                    </button>
+                  )}
+                </div>
+              )
+            })
           ) : (
             <p className="empty-state">{tr(locale, '没有匹配的课程资料', 'No matching materials')}</p>
           )}

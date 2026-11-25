@@ -47,7 +47,20 @@ type RemoteResourceUpdateInfo = {
   reason?: string
   checkedAt: string
 }
+type DesktopDownloadProgressEvent = {
+  taskId: string
+  url: string
+  phase: 'resolving' | 'downloading' | 'completed' | 'error' | 'cancelled'
+  fileIndex?: number
+  fileCount?: number
+  currentFilename?: string
+  transferredBytes?: number
+  totalBytes?: number
+  targetDir?: string
+  error?: string
+}
 type DesktopDownloadRequest = string | {
+  taskId?: string
   url: string
   course?: string
   title?: string
@@ -60,6 +73,7 @@ type DesktopDownloadResult = {
   paths: string[]
   directory: string
   signature?: string
+  totalBytes?: number
   files?: Array<{ path: string; filename: string; courseFolder?: string; categoryFolder?: string; size?: number }>
 }
 interface Window {
@@ -72,13 +86,15 @@ interface Window {
     refreshHku?: () => Promise<number>
     downloadResource?: (url: string) => Promise<number>
     downloadResourceDetailed?: (request: DesktopDownloadRequest) => Promise<DesktopDownloadResult>
+    cancelDownload?: (taskId: string) => Promise<boolean>
+    onDownloadProgress?: (listener: (payload: DesktopDownloadProgressEvent) => void) => () => void
     getDownloadedIndex?: () => Promise<Record<string, string[]>>
     getStorageConfig?: () => Promise<DesktopStorageConfig>
     setStorageConfig?: (config: { storageDir?: string; organizeMode?: StorageOrganizeMode }) => Promise<DesktopStorageConfig>
     chooseStorageDirectory?: (options?: { apply?: boolean; organizeMode?: StorageOrganizeMode }) => Promise<DesktopStorageConfig & { canceled?: boolean }>
     openStorageDirectory?: () => Promise<boolean>
     scanStorageDirectory?: () => Promise<DesktopStorageScanResult>
-    checkResourceUpdates?: (items: Array<{ id: string; url: string; localSize?: number; localMtimeMs?: number }>) => Promise<Record<string, RemoteResourceUpdateInfo>>
+    checkResourceUpdates?: (items: Array<{ id: string; url: string; hasLocalCopy?: boolean; localPath?: string; localSize?: number; localMtimeMs?: number }>) => Promise<Record<string, RemoteResourceUpdateInfo>>
     getDesktopPrefs?: () => Promise<{ minimizeToTray: boolean; trayAvailable: boolean }>
     setDesktopPrefs?: (prefs: { minimizeToTray: boolean }) => Promise<{ minimizeToTray: boolean; trayAvailable: boolean }>
     updateTraySummary?: (summary: { nextClass?: string; nextDdl?: string }) => Promise<boolean>

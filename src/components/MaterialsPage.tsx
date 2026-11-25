@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, CheckCheck, Download, ExternalLink, FileText, FolderOpen, Layers, RefreshCw, Sparkles, Star, XCircle } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { AlertCircle, CheckCheck, Download, ExternalLink, FileText, FolderOpen, Layers, ListChecks, RefreshCw, Sparkles, Star, XCircle } from 'lucide-react'
 import '../materials-manager.css'
+import {
+  cancelAllPendingDownloads,
+  enqueueDownloadBatch,
+  enqueueDownloadTask,
+  formatDownloadBytes,
+  getDownloadQueueSnapshot,
+  onDownloadItemCompleted,
+  subscribeDownloadQueue,
+  type DownloadQueueItem,
+} from '../services/downloadQueue'
 import { safeHkuUrl, type DataMode, type LiveResource, type LiveSnapshot } from '../services/hku'
 import { tr, type Locale } from '../services/i18n'
 import {
+  canonicalizeResourceUrl,
   classifyBglisCategory,
   classifyResourceKind,
   evaluateResourceSnapshotDiff,
@@ -20,7 +31,6 @@ import {
   mergeRemoteUpdateProbes,
   ORGANIZE_MODE_LABELS,
   previewArchiveSubpath,
-  recordLocalDownloadedPaths,
   RESOURCE_KIND_LABELS,
   setWebFallbackStoragePrefs,
   togglePinnedResource,
@@ -49,14 +59,18 @@ export function MaterialsPage({
   dataMode,
   query,
   onRefresh,
+  onOpenDownloads,
+  onNotice,
 }: {
   locale?: Locale
   snapshot: LiveSnapshot
   dataMode: DataMode
   query: string
   onRefresh: () => void
+  onOpenDownloads?: () => void
+  onNotice?: (message: string) => void
 }) {
-  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(() => new Set())
+  const queueSnap = useSyncExternalStore(subscribeDownloadQueue, getDownloadQueueSnapshot, getDownloadQueueSnapshot)
   const [downloadedPaths, setDownloadedPaths] = useState<Record<string, string[]>>(() => getLocalDownloadedIndex())
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => getPinnedResourceIds())
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set())
@@ -75,9 +89,15 @@ export function MaterialsPage({
   const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [filter, setFilter] = useState<MaterialFilter>('all')
   const [message, setMessage] = useState('')
-  const [batchStatus, setBatchStatus] = useState<{ course: string; done: number; total: number } | null>(null)
-  const cancelBatchRef = useRef(false)
   const probedKeyRef = useRef('')
+
+  const latestTaskByResourceId = useMemo(() => {
+    const map = new Map<string, DownloadQueueItem>()
+    for (const entry of queueSnap.items) {
+      if (!map.has(entry.resourceId)) map.set(entry.resourceId, entry)
+    }
+    return map
+  }, [queueSnap.items])
 
   useEffect(() => {
     if (dataMode === 'live') {
@@ -103,7 +123,8 @@ export function MaterialsPage({
         window.myhkuDesktop?.getStorageConfig?.(),
         window.myhkuDesktop?.scanStorageDirectory?.(),
       ])
-      if (nativeIdx) setDownloadedPaths(prev => ({ ...prev, ...nativeIdx }))
+      const mergedIdx = nativeIdx ? { ...getLocalDownloadedIndex(), ...nativeIdx } : getLocalDownloadedIndex()
+      setDownloadedPaths(mergedIdx)
       if (cfg) {
         setStorageDirInfo({
           effectiveDir: cfg.effectiveDir,
@@ -115,14 +136,30 @@ export function MaterialsPage({
         setScannedFiles(scan.files || [])
         setScannedCourseCount(scan.courses?.length || 0)
       }
-      return { scan }
+      return { scan, mergedIdx }
     } catch {
-      return { scan: undefined }
+      return { scan: undefined, mergedIdx: getLocalDownloadedIndex() }
     }
   }, [])
 
   useEffect(() => {
     void refreshStorageAndLocalScan()
+  }, [refreshStorageAndLocalScan])
+
+  useEffect(() => {
+    return onDownloadItemCompleted(event => {
+      const canonical = canonicalizeResourceUrl(event.item.url)
+      setDownloadedPaths(prev => ({
+        ...prev,
+        [event.item.resourceId]: event.paths,
+        [event.item.url]: event.paths,
+        ...(canonical ? { [canonical]: event.paths } : {}),
+      }))
+      const synced = markResourceSynced(event.item.resourceId, event.signature)
+      setNewIds(synced.newIds)
+      setUpdatedMap(synced.updatedMap)
+      void refreshStorageAndLocalScan()
+    })
   }, [refreshStorageAndLocalScan])
 
   const localMatchMap = useMemo(() => {
@@ -137,7 +174,11 @@ export function MaterialsPage({
 
   const getSavedForItem = useCallback(
     (item: LiveResource, url?: string): string[] | undefined => {
-      const indexed = downloadedPaths[item.id] || (url ? downloadedPaths[url] : undefined)
+      const canonical = url ? canonicalizeResourceUrl(url) : ''
+      const indexed =
+        downloadedPaths[item.id] ||
+        (url ? downloadedPaths[url] : undefined) ||
+        (canonical ? downloadedPaths[canonical] : undefined)
       if (indexed && indexed.length > 0) return indexed
       const diskHit = localMatchMap.get(item.id)
       return diskHit ? [diskHit.path] : undefined
@@ -149,53 +190,81 @@ export function MaterialsPage({
     async (silent = false) => {
       if (checkingUpdates) return
       setCheckingUpdates(true)
+      const syncedWhileProbing = new Set<string>()
+      const unsubCompleted = onDownloadItemCompleted(ev => {
+        syncedWhileProbing.add(ev.item.resourceId)
+      })
       try {
-        const { scan } = await refreshStorageAndLocalScan()
+        const { scan, mergedIdx } = await refreshStorageAndLocalScan()
         const latestFiles = scan?.files || scannedFiles
         if (dataMode === 'live' && window.myhkuDesktop?.checkResourceUpdates) {
           const candidates = snapshot.resources
             .map(item => {
               const url = safeHkuUrl(item.url) || ''
               if (!isDirectDownloadableUrl(url)) return null
+              const canonical = canonicalizeResourceUrl(url)
+              const indexed = mergedIdx[item.id] || mergedIdx[url] || (canonical ? mergedIdx[canonical] : undefined)
+              const realIndexedPath = indexed?.find(p => !p.startsWith('downloaded:') && !p.startsWith('android:'))
               const diskMatch = matchResourceToLocalFile(item, latestFiles)
+              const hasLocalCopy = Boolean(realIndexedPath || diskMatch)
               return {
                 id: item.id,
                 url,
-                ...(diskMatch ? { localSize: diskMatch.size, localMtimeMs: diskMatch.mtimeMs } : {}),
+                hasLocalCopy,
+                ...(diskMatch
+                  ? { localPath: diskMatch.path, localSize: diskMatch.size, localMtimeMs: diskMatch.mtimeMs }
+                  : realIndexedPath
+                    ? { localPath: realIndexedPath }
+                    : {}),
               }
             })
             .filter((x): x is NonNullable<typeof x> => x !== null)
+            .sort((a, b) => Number(b.hasLocalCopy) - Number(a.hasLocalCopy))
           if (candidates.length > 0) {
             const probes = await window.myhkuDesktop.checkResourceUpdates(candidates)
-            const merged = mergeRemoteUpdateProbes(probes)
+            const safeProbes: typeof probes = {}
+            for (const [id, info] of Object.entries(probes || {})) {
+              const currentTask = getDownloadQueueSnapshot().items.find(
+                t => t.resourceId === id && (t.status === 'downloading' || t.status === 'queued'),
+              )
+              if (syncedWhileProbing.has(id) || currentTask) continue
+              safeProbes[id] = info
+            }
+            const merged = mergeRemoteUpdateProbes(safeProbes)
             setUpdatedMap(merged)
             if (!silent) {
               const updCount = Object.keys(merged).length
-              setMessage(
+              const msg =
                 updCount > 0
-                  ? tr(locale, `已完成检测：发现 ${updCount} 项课程文件有更新`, `Check complete: ${updCount} updated files found`)
-                  : tr(locale, '已完成检测：当前所有已下载课程资料均为最新版本', 'All local course materials are up to date'),
-              )
+                  ? tr(locale, `已完成检测：发现 ${updCount} 项已存课程文件有更新`, `Check complete: ${updCount} updated files found`)
+                  : tr(locale, '已完成检测：当前所有已下载课程资料均为最新版本', 'All local course materials are up to date')
+              setMessage(msg)
+              onNotice?.(msg)
             }
             return
           }
         }
         if (!silent) {
-          setMessage(
-            tr(
-              locale,
-              `已扫描本地目录（共识别 ${latestFiles.length} 个课程文件）`,
-              `Scanned local folder (${latestFiles.length} files indexed)`,
-            ),
+          const msg = tr(
+            locale,
+            `已扫描本地目录（共识别 ${latestFiles.length} 个课程文件）`,
+            `Scanned local folder (${latestFiles.length} files indexed)`,
           )
+          setMessage(msg)
+          onNotice?.(msg)
         }
       } catch (error) {
-        if (!silent) setMessage(error instanceof Error ? error.message : '更新检测失败，请稍后重试')
+        if (!silent) {
+          const errMsg = error instanceof Error ? error.message : '更新检测失败，请稍后重试'
+          setMessage(errMsg)
+          onNotice?.(errMsg)
+        }
       } finally {
+        unsubCompleted()
         setCheckingUpdates(false)
       }
     },
-    [checkingUpdates, dataMode, locale, refreshStorageAndLocalScan, scannedFiles, snapshot.resources],
+    [checkingUpdates, dataMode, locale, onNotice, refreshStorageAndLocalScan, scannedFiles, snapshot.resources],
   )
 
   useEffect(() => {
@@ -311,136 +380,64 @@ export function MaterialsPage({
     )
   }
 
-  const downloadSingle = async (
+  const handleQueueSingle = (
     item: LiveResource,
     url: string,
-    options?: { silent?: boolean; replaceExisting?: boolean; targetFilePath?: string },
-  ): Promise<boolean> => {
-    const silent = Boolean(options?.silent)
-    if (dataMode === 'demo' && !window.myhkuDesktop?.downloadResource && !window.myhkuDesktop?.downloadResourceDetailed) {
-      if (!silent) setMessage('当前为演示数据模式；连接真实 HKU 账户后可直接下载并按课程目录自动归档')
-      return false
-    }
-    setDownloadingIds(prev => new Set(prev).add(item.id))
-    if (!silent) setMessage('')
-    try {
-      if (window.myhkuDesktop?.downloadResourceDetailed) {
-        const result = await window.myhkuDesktop.downloadResourceDetailed({
-          url,
-          course: item.course,
-          title: item.title,
-          organizeMode: storageDirInfo.organizeMode,
-          replaceExisting: Boolean(options?.replaceExisting),
-          targetFilePath: options?.targetFilePath,
-        })
-        if (result.paths?.length) {
-          recordLocalDownloadedPaths(item.id, result.paths)
-          const nextIdx = recordLocalDownloadedPaths(url, result.paths)
-          setDownloadedPaths(prev => ({ ...prev, ...nextIdx, [item.id]: result.paths }))
-        }
-        const synced = markResourceSynced(item.id, result.signature)
-        setNewIds(synced.newIds)
-        setUpdatedMap(synced.updatedMap)
-        void refreshStorageAndLocalScan()
-        const firstFile = result.files?.[0]
-        const subHint = firstFile?.courseFolder
-          ? `${firstFile.courseFolder}${firstFile.categoryFolder ? ` / ${firstFile.categoryFolder}` : ''}`
-          : ''
-        if (!silent) {
-          setMessage(
-            options?.replaceExisting
-              ? `已更新最新文件${subHint ? `至 ${subHint}` : ''}（共 ${result.count} 个文件）`
-              : `已下载 ${result.count} 个文件${subHint ? `并归档至 ${subHint}` : '到储存目录'}`,
-          )
-        }
-        return true
-      } else if (window.myhkuDesktop?.downloadResource) {
-        const count = await window.myhkuDesktop.downloadResource(url)
-        const marker = [`downloaded:${url}`]
-        recordLocalDownloadedPaths(item.id, marker)
-        setDownloadedPaths(prev => ({ ...prev, [item.id]: marker, [url]: marker }))
-        const synced = markResourceSynced(item.id)
-        setNewIds(synced.newIds)
-        setUpdatedMap(synced.updatedMap)
-        if (!silent) setMessage(`已下载 ${count} 个文件到下载文件夹`)
-        return true
-      } else if (window.myhkuAndroid?.downloadResource) {
-        const ok = window.myhkuAndroid.downloadResource(url)
-        if (ok) {
-          const marker = [`android:${url}`]
-          recordLocalDownloadedPaths(item.id, marker)
-          setDownloadedPaths(prev => ({ ...prev, [item.id]: marker, [url]: marker }))
-          const synced = markResourceSynced(item.id)
-          setNewIds(synced.newIds)
-          setUpdatedMap(synced.updatedMap)
-        }
-        if (!silent) setMessage(ok ? '已加入系统下载队列，可在通知栏查看下载进度' : '下载启动失败，请确认 Moodle 已登录')
-        return ok
-      } else {
-        const target = new URL(url)
-        if (target.pathname === '/mod/resource/view.php') target.searchParams.set('redirect', '1')
-        target.searchParams.set('forcedownload', '1')
-        const frame = document.createElement('iframe')
-        frame.hidden = true
-        frame.src = target.href
-        document.body.appendChild(frame)
-        setTimeout(() => frame.remove(), 60_000)
-        const synced = markResourceSynced(item.id)
-        setNewIds(synced.newIds)
-        setUpdatedMap(synced.updatedMap)
-        if (!silent) setMessage('已请求下载；若未开始，请使用桌面端或 Android 客户端并确认 Moodle 已连接')
-        return true
-      }
-    } catch (error) {
-      if (!silent) setMessage(error instanceof Error ? error.message : '下载失败，请重试')
-      return false
-    } finally {
-      setDownloadingIds(prev => {
-        const next = new Set(prev)
-        next.delete(item.id)
-        return next
-      })
-    }
+    options?: { replaceExisting?: boolean; targetFilePath?: string },
+  ) => {
+    const { deduplicated } = enqueueDownloadTask({
+      resource: item,
+      url,
+      organizeMode: storageDirInfo.organizeMode,
+      replaceExisting: Boolean(options?.replaceExisting),
+      targetFilePath: options?.targetFilePath,
+      dataMode,
+    })
+    const msg = deduplicated
+      ? tr(locale, `「${item.title}」已在下载队列中`, `${item.title} is already in the download queue`)
+      : tr(
+          locale,
+          `已加入下载队列：${item.title}`,
+          `Queued for download: ${item.title}`,
+        )
+    setMessage(msg)
+    onNotice?.(msg)
   }
 
-  const runBatchDownload = async (
+  const handleQueueBatch = (
     label: string,
     targets: Array<{ item: LiveResource; url: string; replaceExisting?: boolean; targetFilePath?: string }>,
   ) => {
-    if (!targets.length || batchStatus) return
-    if (dataMode === 'demo' && !window.myhkuDesktop?.downloadResource && !window.myhkuDesktop?.downloadResourceDetailed) {
-      setMessage('当前为演示数据模式；连接真实 HKU 账户后可一键同步新增与更新文件')
-      return
-    }
-    cancelBatchRef.current = false
-    setBatchStatus({ course: label, done: 0, total: targets.length })
-    let okCount = 0
-    for (let i = 0; i < targets.length; i += 1) {
-      if (cancelBatchRef.current) break
-      setBatchStatus({ course: label, done: i, total: targets.length })
-      const entry = targets[i]
-      const ok = await downloadSingle(entry.item, entry.url, {
-        silent: true,
-        replaceExisting: entry.replaceExisting,
+    if (!targets.length) return
+    const { added, skipped } = enqueueDownloadBatch(
+      targets.map(entry => ({
+        resource: entry.item,
+        url: entry.url,
+        organizeMode: storageDirInfo.organizeMode,
+        replaceExisting: Boolean(entry.replaceExisting),
         targetFilePath: entry.targetFilePath,
-      })
-      if (ok) okCount += 1
-      setBatchStatus({ course: label, done: i + 1, total: targets.length })
-    }
-    const wasCancelled = cancelBatchRef.current
-    setBatchStatus(null)
-    setMessage(
-      wasCancelled
-        ? `已停止批量下载（已完成 ${okCount} / ${targets.length} 项）`
-        : `「${label}」同步完成：成功下载/更新 ${okCount} / ${targets.length} 项资料`,
+        dataMode,
+      })),
     )
+    const msg =
+      added > 0
+        ? tr(
+            locale,
+            `已将「${label}」${added} 项资料加入下载队列${skipped > 0 ? `（跳过已在队列 ${skipped} 项）` : ''}`,
+            `Added ${added} item(s) from ${label} to the download queue`,
+          )
+        : tr(locale, '所选资料均已在下载队列中', 'Selected items are already in the download queue')
+    setMessage(msg)
+    onNotice?.(msg)
   }
 
   const openFile = async (filePath: string) => {
     try {
       await window.myhkuDesktop?.openDownloadedFile?.(filePath)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '无法打开文件')
+      const errMsg = error instanceof Error ? error.message : '无法打开文件'
+      setMessage(errMsg)
+      onNotice?.(errMsg)
     }
   }
 
@@ -448,11 +445,14 @@ export function MaterialsPage({
     try {
       await window.myhkuDesktop?.revealDownloadedFile?.(filePath)
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '无法打开所在目录')
+      const errMsg = error instanceof Error ? error.message : '无法打开所在目录'
+      setMessage(errMsg)
+      onNotice?.(errMsg)
     }
   }
 
   const totalDiffBadges = newIds.size + updatedIds.size
+  const activeOrQueuedCount = queueSnap.activeCount + queueSnap.queuedCount
 
   return (
     <section className="panel live-page">
@@ -468,6 +468,14 @@ export function MaterialsPage({
           </p>
         </div>
         <div className="head-inline-actions">
+          {onOpenDownloads && (
+            <button type="button" className="mini-action-btn" onClick={onOpenDownloads}>
+              <ListChecks size={12} />{' '}
+              {activeOrQueuedCount > 0
+                ? tr(locale, `下载队列 (${activeOrQueuedCount})`, `Queue (${activeOrQueuedCount})`)
+                : tr(locale, '下载队列', 'Downloads')}
+            </button>
+          )}
           {totalDiffBadges > 0 && (
             <button
               type="button"
@@ -551,6 +559,43 @@ export function MaterialsPage({
         </div>
       </div>
 
+      {(activeOrQueuedCount > 0 || queueSnap.failedCount > 0) && (
+        <div className={`materials-queue-strip ${queueSnap.failedCount > 0 && activeOrQueuedCount === 0 ? 'has-error' : ''}`} role="status">
+          <span>
+            {activeOrQueuedCount > 0
+              ? tr(
+                  locale,
+                  `后台下载队列运行中：${queueSnap.activeCount} 项正在传输 · ${queueSnap.queuedCount} 项排队等待 · 已完成 ${queueSnap.completedCount} 项`,
+                  `Download queue running: ${queueSnap.activeCount} active · ${queueSnap.queuedCount} queued · ${queueSnap.completedCount} done`,
+                )
+              : tr(
+                  locale,
+                  `下载队列中有 ${queueSnap.failedCount} 项任务需要处理或重试`,
+                  `${queueSnap.failedCount} download task(s) failed and can be retried`,
+                )}
+          </span>
+          <div className="storage-bar-actions">
+            {activeOrQueuedCount > 0 && (
+              <button
+                type="button"
+                className="mini-action-btn"
+                onClick={() => {
+                  const cancelled = cancelAllPendingDownloads()
+                  if (cancelled > 0) onNotice?.(tr(locale, `已停止 ${cancelled} 项队列任务`, `Stopped ${cancelled} queued download(s)`))
+                }}
+              >
+                <XCircle size={12} /> {tr(locale, '停止队列', 'Stop Queue')}
+              </button>
+            )}
+            {onOpenDownloads && (
+              <button type="button" className="mini-action-btn" onClick={onOpenDownloads}>
+                <ListChecks size={12} /> {tr(locale, '打开下载队列 →', 'View Queue →')}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {(updatedIds.size > 0 || newIds.size > 0) && (
         <div
           className={`materials-sync-alert ${updatedIds.size === 0 ? 'only-new' : ''}`}
@@ -600,9 +645,8 @@ export function MaterialsPage({
               <button
                 type="button"
                 className="one-click-sync-btn"
-                disabled={Boolean(batchStatus)}
                 onClick={() =>
-                  void runBatchDownload(
+                  handleQueueBatch(
                     tr(locale, '新增与更新资料', 'New & Updated Materials'),
                     diffSummary.combinedTargets,
                   )
@@ -638,23 +682,6 @@ export function MaterialsPage({
           )
         })}
       </div>
-
-      {batchStatus && (
-        <div className="batch-progress-bar" role="status">
-          <span>
-            正在批量下载「{batchStatus.course}」：{batchStatus.done} / {batchStatus.total}
-          </span>
-          <button
-            type="button"
-            className="mini-action-btn"
-            onClick={() => {
-              cancelBatchRef.current = true
-            }}
-          >
-            <XCircle size={12} /> 停止队列
-          </button>
-        </div>
-      )}
 
       {message && (
         <p className="download-message" role="status">
@@ -705,8 +732,7 @@ export function MaterialsPage({
                       <button
                         type="button"
                         className="mini-action-btn"
-                        disabled={Boolean(batchStatus)}
-                        onClick={() => void runBatchDownload(course, downloadablePendingOrUpdated)}
+                        onClick={() => handleQueueBatch(course, downloadablePendingOrUpdated)}
                       >
                         <Download size={11} /> 一键下新增/更新 ({downloadablePendingOrUpdated.length})
                       </button>
@@ -714,8 +740,7 @@ export function MaterialsPage({
                     <button
                       type="button"
                       className="mini-action-btn"
-                      disabled={Boolean(batchStatus)}
-                      onClick={() => void runBatchDownload(course, downloadableAll)}
+                      onClick={() => handleQueueBatch(course, downloadableAll)}
                     >
                       <Layers size={11} /> 一键全下 ({downloadableAll.length})
                     </button>
@@ -727,7 +752,10 @@ export function MaterialsPage({
                 const isDownloadableFile = isDirectDownloadableUrl(url)
                 const kind = classifyResourceKind(item.title, url)
                 const categoryFolder = storageDirInfo.organizeMode === 'bglis' ? classifyBglisCategory(item.title, url) : ''
-                const isBusy = downloadingIds.has(item.id)
+                const rowTask = latestTaskByResourceId.get(item.id)
+                const isDownloading = rowTask?.status === 'downloading'
+                const isQueued = rowTask?.status === 'queued'
+                const isBusy = isDownloading || isQueued
                 const saved = getSavedForItem(item, url)
                 const diskHit = localMatchMap.get(item.id)
                 const hasRealDesktopFile =
@@ -738,6 +766,10 @@ export function MaterialsPage({
                 const isUpdated = Boolean(updateRecord)
                 const targetPathForReplace = diskHit?.path || (hasRealDesktopFile ? saved[0] : undefined)
                 const archivePreview = previewArchiveSubpath(item.course, item.title, url, storageDirInfo.organizeMode)
+                const livePct =
+                  isDownloading && rowTask?.totalBytes && rowTask.totalBytes > 0
+                    ? Math.min(100, Math.round((rowTask.transferredBytes / rowTask.totalBytes) * 100))
+                    : null
                 return (
                   <div className={`resource-row ${isUpdated ? 'is-updated' : ''}`} key={item.id}>
                     <FileText size={16} />
@@ -754,11 +786,27 @@ export function MaterialsPage({
                           {updateRecord.reason} · {tr(locale, '点击「一键更新」同步最新文件', 'Click Update to overwrite with latest version')}
                         </small>
                       )}
+                      {rowTask?.status === 'failed' && rowTask.error && (
+                        <small className="dl-item-error">
+                          {tr(locale, `下载失败：${rowTask.error}`, `Failed: ${rowTask.error}`)}
+                        </small>
+                      )}
+                      {isDownloading && rowTask.transferredBytes > 0 && (
+                        <small className="saved-hint">
+                          {tr(
+                            locale,
+                            `正在下载：已接收 ${formatDownloadBytes(rowTask.transferredBytes)}${livePct !== null ? ` (${livePct}%)` : ''}`,
+                            `Downloading: ${formatDownloadBytes(rowTask.transferredBytes)}${livePct !== null ? ` (${livePct}%)` : ''}`,
+                          )}
+                        </small>
+                      )}
                       {saved && saved.length > 0 ? (
                         <small className="saved-hint">
                           {diskHit
                             ? tr(locale, `已存课程目录：${diskHit.relativePath}`, `In folder: ${diskHit.relativePath}`)
-                            : tr(locale, `已保存至本地目录${archivePreview ? ` (${archivePreview})` : ''}`, 'Saved locally')}
+                            : hasRealDesktopFile
+                              ? tr(locale, `已保存：${saved[0]}`, `Saved: ${saved[0]}`)
+                              : tr(locale, `已保存至本地目录${archivePreview ? ` (${archivePreview})` : ''}`, 'Saved locally')}
                         </small>
                       ) : (
                         isDownloadableFile && archivePreview && (
@@ -776,18 +824,22 @@ export function MaterialsPage({
                             className={isUpdated ? 'update-download-btn' : ''}
                             disabled={isBusy}
                             onClick={() =>
-                              void downloadSingle(item, url, {
+                              handleQueueSingle(item, url, {
                                 replaceExisting: isUpdated,
                                 targetFilePath: targetPathForReplace,
                               })
                             }
                           >
                             <Download size={14} />
-                            {isBusy
-                              ? tr(locale, '下载中…', 'Downloading…')
-                              : isUpdated
-                                ? tr(locale, '一键更新', 'Update')
-                                : tr(locale, '下载', 'Download')}
+                            {isDownloading
+                              ? livePct !== null
+                                ? `${livePct}%`
+                                : tr(locale, '下载中…', 'Downloading…')
+                              : isQueued
+                                ? tr(locale, '排队中…', 'Queued…')
+                                : isUpdated
+                                  ? tr(locale, '一键更新', 'Update')
+                                  : tr(locale, '下载', 'Download')}
                           </button>
                         ) : (
                           <a

@@ -1,4 +1,4 @@
-import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Bell,
@@ -6,6 +6,7 @@ import {
   CalendarDays,
   CheckCircle2,
   ChevronDown,
+  Download,
   FileText,
   Globe,
   KeyRound,
@@ -24,10 +25,16 @@ import { AccountSetup } from './components/AccountSetup'
 import { CommandPaletteModal } from './components/CommandPaletteModal'
 import { CustomTaskModal } from './components/CustomTaskModal'
 import { CalendarPage } from './components/CalendarPage'
+import { DownloadQueuePage } from './components/DownloadQueuePage'
 import { MaterialsPage } from './components/MaterialsPage'
 import { MoodleCourseSelectorModal } from './components/MoodleCourseSelectorModal'
 import { MoodlePage } from './components/MoodlePage'
 import { OverviewPage, type ConnectionPhase } from './components/OverviewPage'
+import {
+  clearAllDownloadQueueState,
+  getDownloadQueueSnapshot,
+  subscribeDownloadQueue,
+} from './services/downloadQueue'
 import {
   clearMoodleCoursePrefs,
   filterSnapshotByCoursePrefs,
@@ -95,6 +102,7 @@ const navItems: { key: NavTarget; label: string; icon: typeof LayoutDashboard }[
   { key: 'calendar', label: '我的课表', icon: CalendarDays },
   { key: 'moodle', label: 'Moodle', icon: BookOpen },
   { key: 'materials', label: '课程资料', icon: FileText },
+  { key: 'downloads', label: '下载队列', icon: Download },
   { key: 'settings', label: '设置', icon: Settings },
 ]
 
@@ -104,6 +112,7 @@ function isApplePlatform(): boolean {
 }
 
 function App() {
+  const queueSnap = useSyncExternalStore(subscribeDownloadQueue, getDownloadQueueSnapshot, getDownloadQueueSnapshot)
   const [authReady, setAuthReady] = useState(false)
   const [accountConfigured, setAccountConfigured] = useState(false)
   const [account, setAccount] = useState<{ username?: string; email?: string }>({})
@@ -359,6 +368,7 @@ function App() {
 
   const handleSignOut = async () => {
     setUserMenuOpen(false)
+    clearAllDownloadQueueState()
     await signOutAccount()
     setConnections(getConnectionStates())
     setLiveSnapshot(null)
@@ -541,6 +551,11 @@ function App() {
               <Icon size={18} />
               <span>{NAV_LABELS[locale][key]}</span>
               {key === 'moodle' && pendingCount > 0 && <i className="nav-dot" title={`${pendingCount}`} />}
+              {key === 'downloads' && (queueSnap.activeCount + queueSnap.queuedCount > 0 ? (
+                <em className="nav-badge-pill">{queueSnap.activeCount + queueSnap.queuedCount}</em>
+              ) : queueSnap.failedCount > 0 ? (
+                <em className="nav-badge-pill warn">{queueSnap.failedCount}</em>
+              ) : null)}
             </button>
           ))}
         </nav>
@@ -821,6 +836,7 @@ function App() {
                 locale={locale}
                 snapshot={activeSnapshot}
                 rawSnapshot={rawActiveSnapshot || activeSnapshot}
+                dataMode={dataMode}
                 coursePrefs={coursePrefs}
                 onChangeCoursePrefs={handleUpdateCoursePrefs}
                 onOpenCourseSelector={() => setCourseSelectorOpen(true)}
@@ -829,6 +845,8 @@ function App() {
                 selectedCourseId={selectedCourseId}
                 onSelectCourse={setSelectedCourseId}
                 onOpenMaterials={() => handleNavigate('materials')}
+                onOpenDownloads={() => handleNavigate('downloads')}
+                onNotice={msg => showToast(msg, 3500)}
                 onRefresh={() => sync()}
                 onOpenAddTask={openAddTaskModal}
                 onToggleCustomTask={handleToggleCustomTask}
@@ -858,6 +876,8 @@ function App() {
                 dataMode={dataMode}
                 query={query}
                 onRefresh={() => sync()}
+                onOpenDownloads={() => handleNavigate('downloads')}
+                onNotice={msg => showToast(msg, 3500)}
               />
             ) : (
               <OverviewPage
@@ -873,6 +893,15 @@ function App() {
                 onRefresh={() => sync()}
               />
             ))}
+
+          {active === 'downloads' && (
+            <DownloadQueuePage
+              locale={locale}
+              query={query}
+              onOpenMaterials={() => handleNavigate('materials')}
+              onNotice={msg => showToast(msg, 3500)}
+            />
+          )}
 
           {active === 'settings' && (
             <SettingsPage

@@ -5,11 +5,17 @@ import os from 'node:os'
 import path from 'node:path'
 import { stripTypeScriptTypes } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import crypto from 'node:crypto'
 import {
+  buildStableFileSignature,
   classifyBglisCategory,
+  computeFileSha1,
+  evaluateRemoteResourceUpdate,
   extractCourseFolderName,
+  fileLinksFromHtml,
   probeMoodleResource,
   resolveCourseStorageDirectory,
+  resolveMoodleDownloads,
   saveMoodleDownload,
   scanStorageDirectory,
 } from '../desktop/downloads.mjs'
@@ -222,7 +228,147 @@ test('evaluateResourceSnapshotDiff, mergeRemoteUpdateProbes, and notifications d
     const alerts = evaluateSnapshotNotifications(snapNext)
     assert.equal(alerts.some(a => a.title === '新增课程资料' && a.target === 'materials'), true)
     assert.equal(alerts.some(a => a.title === '课程资料有更新' && a.target === 'materials'), true)
+
+    // Regression: when remote probe confirms up-to-date, stale remote update flags are cleared
+    const clearedProbe = mergeRemoteUpdateProbes({
+      r2: { signature: 'sig-v2', hasRemoteUpdate: false, checkedAt: '2026-11-25T02:00:00Z' },
+    })
+    assert.equal(clearedProbe.r2, undefined, 'up-to-date remote probe clears stale updated flag')
+
+    // Regression: Moodle screen-reader suffix (.accesshide " File") must not trigger false title update
+    const accesshideCheck = evaluateResourceSnapshotDiff([
+      { id: 'r2', title: 'Tutorial 1 Handout File', course: 'GLIS1903', url: 'https://moodle.hku.hk/mod/resource/view.php?id=2&redirect=1' },
+    ])
+    assert.equal(accesshideCheck.updatedMap.r2, undefined, 'trailing Moodle File suffix and redirect param do not trigger false update')
   } finally {
     delete globalThis.localStorage
+  }
+})
+
+test('regression: compressed Content-Length drift, legacy signatures, cross-course isolation, and redirect=1 fallback', async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'myhku-regression-'))
+  try {
+    const pdfContent = Buffer.from('Just downloaded lecture PDF content v1', 'utf8')
+    const pdfSha1 = crypto.createHash('sha1').update(pdfContent).digest('hex')
+    const filePath = path.join(tmpRoot, 'GLIS1901', 'Lecture Notes', 'Syllabus.pdf')
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    fs.writeFileSync(filePath, pdfContent)
+
+    // 1. Strict course isolation: GLIS1908 Syllabus must NOT match GLIS1901/Lecture Notes/Syllabus.pdf
+    const scanned = await scanStorageDirectory(tmpRoot)
+    const { matchResourceToLocalFile } = await loadTsModule('src/services/materials.ts')
+    const wrongCourseHit = matchResourceToLocalFile(
+      { id: '908', title: 'Syllabus', course: 'GLIS1908 Global Seminar' },
+      scanned.files,
+    )
+    assert.equal(wrongCourseHit, undefined, 'never matches local file from another course folder')
+
+    const wrongExtHit = matchResourceToLocalFile(
+      { id: '909', title: 'Syllabus.pptx', course: 'GLIS1901 Foundations' },
+      scanned.files,
+    )
+    assert.equal(wrongExtHit, undefined, 'never matches .pptx resource against .pdf local file')
+
+    // 2. Stable signature ignores omitted vs synthesized Content-Length when ETag/Last-Modified match
+    const sigChunked = buildStableFileSignature({
+      canonicalUrl: 'https://moodle.hku.hk/pluginfile.php/10/mod_resource/content/1/Syllabus.pdf',
+      etag: `"${pdfSha1}"`,
+      lastModified: 'Thu, 29 Oct 2026 06:43:37 GMT',
+      uncompressedLength: undefined,
+    })
+    const sigCached = buildStableFileSignature({
+      canonicalUrl: 'https://moodle.hku.hk/pluginfile.php/10/mod_resource/content/1/Syllabus.pdf',
+      etag: `W/"${pdfSha1}"`,
+      lastModified: 'Thu, 29 Oct 2026 06:43:37 GMT',
+      uncompressedLength: pdfContent.length,
+    })
+    assert.equal(sigChunked, sigCached, 'signature stays identical across chunked network download and disk-cache hit')
+
+    // 3. Legacy 4-part signature (trailing empty contentLength) does not false-positive on subsequent probe
+    const legacySavedMeta = {
+      signature: `https://moodle.hku.hk/pluginfile.php/10/mod_resource/content/1/Syllabus.pdf|"${pdfSha1}"|Thu, 29 Oct 2026 06:43:37 GMT|`,
+    }
+    const probeCached = {
+      files: [{
+        canonicalUrl: 'https://moodle.hku.hk/pluginfile.php/10/mod_resource/content/1/Syllabus.pdf',
+        revision: 1,
+        etag: `"${pdfSha1}"`,
+        cleanEtag: pdfSha1,
+        lastModified: 'Thu, 29 Oct 2026 06:43:37 GMT',
+        contentLength: pdfContent.length,
+        isIdentityEncoding: true,
+      }],
+    }
+    assert.equal(evaluateRemoteResourceUpdate({ probe: probeCached, savedMeta: legacySavedMeta }).hasRemoteUpdate, false)
+
+    // 4. Pre-existing / annotated local file newer than remote Last-Modified or matching SHA-1 ETag is NOT flagged
+    const localStat = fs.statSync(filePath)
+    const sha1Calculated = await computeFileSha1(filePath)
+    assert.equal(sha1Calculated, pdfSha1)
+    const preExistingCheck = evaluateRemoteResourceUpdate({
+      probe: {
+        files: [{
+          canonicalUrl: 'https://moodle.hku.hk/pluginfile.php/10/mod_resource/content/1/Syllabus.pdf',
+          etag: '"different-pathname-etag"',
+          cleanEtag: 'different-pathname-etag',
+          lastModified: 'Thu, 29 Oct 2026 06:43:37 GMT',
+          contentLength: 123, // e.g. gzipped or user annotated PDF
+          isIdentityEncoding: false,
+        }],
+      },
+      savedMeta: undefined,
+      localFile: { path: filePath, size: localStat.size, mtimeMs: Date.parse('2026-11-25T01:24:10Z') },
+    })
+    assert.equal(preExistingCheck.hasRemoteUpdate, false, 'recently downloaded or annotated local file is never falsely flagged outdated')
+
+    // 5. Genuine newer upload on Moodle IS flagged accurately
+    const genuineNewerCheck = evaluateRemoteResourceUpdate({
+      probe: {
+        files: [{
+          canonicalUrl: 'https://moodle.hku.hk/pluginfile.php/10/mod_resource/content/1/Syllabus.pdf',
+          etag: '"new-etag"',
+          cleanEtag: 'new-etag',
+          lastModified: 'Wed, 25 Nov 2026 08:00:00 GMT',
+          contentLength: 999,
+          isIdentityEncoding: true,
+        }],
+      },
+      savedMeta: undefined,
+      localFile: { path: filePath, size: localStat.size, mtimeMs: Date.parse('2026-11-10T01:00:00Z') },
+    })
+    assert.equal(genuineNewerCheck.hasRemoteUpdate, true)
+
+    // 6. Popup/workaround mod/resource/view.php retries with ?redirect=1 and resolves target file
+    const popupResource = 'https://moodle.hku.hk/mod/resource/view.php?id=888'
+    const directPdf = 'https://moodle.hku.hk/pluginfile.php/88/mod_resource/content/1/%E7%AC%AC1%E5%91%A8%E8%AE%B2%E4%B9%89.pdf'
+    const resolvedPopup = await resolveMoodleDownloads(
+      popupResource,
+      async target => {
+        if (target === popupResource) {
+          return {
+            status: 200,
+            ok: true,
+            url: popupResource,
+            headers: new Headers({ 'content-type': 'text/html' }),
+            text: async () => '<div id="region-main"><p>Popup window workaround</p></div>',
+          }
+        }
+        if (target === `${popupResource}&redirect=1`) {
+          return { status: 303, ok: false, headers: new Headers({ location: directPdf }), body: { cancel: async () => {} } }
+        }
+        return {
+          status: 200,
+          ok: true,
+          url: directPdf,
+          headers: new Headers({ 'content-type': 'application/pdf' }),
+          body: { cancel: async () => {} },
+        }
+      },
+      async () => [],
+    )
+    assert.deepEqual(resolvedPopup, [directPdf], 'Popup workaround page automatically resolves via redirect=1')
+    void fileLinksFromHtml
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
   }
 })
